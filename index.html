@@ -434,7 +434,7 @@
                 const dataToSave = {
                     word: word,
                     features: JSON.stringify(signData.features),
-                    created_at: new Date(signData.timestamp).toISOString()
+                    timestamp: new Date(signData.timestamp).toISOString()
                 };
 
                 // 기존 같은 단어가 있으면 업데이트, 없으면 추가
@@ -480,7 +480,7 @@
                 const { data, error } = await supabase
                     .from('sign_language_data')
                     .select('*')
-                    .order('timestamp', { ascending: false });
+                    .order('created_at', { ascending: false });
 
                 if (error) {
                     console.error('클라우드 불러오기 실패:', error);
@@ -499,7 +499,7 @@
                 data.forEach(item => {
                     trainedSigns[item.word] = {
                         features: JSON.parse(item.features),
-                        timestamp: new Date(item.timestamp).getTime(),
+                        timestamp: new Date(item.created_at).getTime(),
                         fromCloud: true // 클라우드에서 온 데이터임을 표시
                     };
                 });
@@ -1172,5 +1172,3 @@
     </script>
 </body>
 </html>
-
-
