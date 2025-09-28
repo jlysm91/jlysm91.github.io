@@ -434,7 +434,7 @@
                 const dataToSave = {
                     word: word,
                     features: JSON.stringify(signData.features),
-                    timestamp: new Date(signData.timestamp).toISOString()
+                    created_at: new Date(signData.timestamp).toISOString()
                 };
 
                 // 기존 같은 단어가 있으면 업데이트, 없으면 추가
@@ -1172,4 +1172,5 @@
     </script>
 </body>
 </html>
+
 
