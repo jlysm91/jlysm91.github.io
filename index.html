@@ -399,14 +399,12 @@
     </div>
 
     <script>
-        // Supabase 설정 (실제 값으로 변경하세요)
         const SUPABASE_URL = 'https://qmddevysfschoeairtjg.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtZGRldnlzZnNjaG9lYWlydGpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg5OTM3NzAsImV4cCI6MjA3NDU2OTc3MH0.aGrQq1-VPSEv3yXUjpDlk_LkEarq3ZwCY86JKIhFW5s';
         
         let supabase;
         let isSupabaseEnabled = false;
 
-        // Supabase 초기화
         function initializeSupabase() {
             try {
                 if (SUPABASE_URL === 'YOUR_SUPABASE_URL' || SUPABASE_ANON_KEY === 'YOUR_SUPABASE_ANON_KEY') {
@@ -426,18 +424,43 @@
             }
         }
 
-        // 클라우드에 자동 저장
-        async function saveToCloudAuto(word, signData) {
+        async function saveToCloudAuto(word, signData, videoBlob = null) {
             if (!isSupabaseEnabled) return false;
 
             try {
+                let videoUrl = null;
+                
+                // 비디오가 있으면 Storage에 업로드
+                if (videoBlob) {
+                    const fileName = `${word}_${Date.now()}.webm`;
+                    const { data: uploadData, error: uploadError } = await supabase
+                        .storage
+                        .from('sign-videos')
+                        .upload(fileName, videoBlob, {
+                            contentType: 'video/webm',
+                            upsert: false
+                        });
+
+                    if (uploadError) {
+                        console.error('비디오 업로드 실패:', uploadError);
+                    } else {
+                        // Public URL 가져오기
+                        const { data: urlData } = supabase
+                            .storage
+                            .from('sign-videos')
+                            .getPublicUrl(fileName);
+                        videoUrl = urlData.publicUrl;
+                        console.log('비디오 업로드 완료:', videoUrl);
+                    }
+                }
+
                 const dataToSave = {
                     word: word,
                     features: JSON.stringify(signData.features),
-                    created_at: new Date(signData.timestamp).toISOString()
+                    timestamp: new Date(signData.timestamp).toISOString(),
+                    video_url: videoUrl
                 };
 
-                // 기존 같은 단어가 있으면 업데이트, 없으면 추가
                 const { data: existing } = await supabase
                     .from('sign_language_data')
                     .select('id')
@@ -460,7 +483,7 @@
                     throw result.error;
                 }
 
-                console.log(`"${word}" 클라우드 저장 완료`);
+                console.log(`"${word}" 클라우드 저장 완료${videoUrl ? ' (비디오 포함)' : ''}`);
                 return true;
 
             } catch (error) {
@@ -469,7 +492,6 @@
             }
         }
 
-        // 클라우드에서 자동 불러오기
         async function loadFromCloudAuto() {
             if (!isSupabaseEnabled) {
                 loadFromLocalStorage();
@@ -494,20 +516,18 @@
                     return;
                 }
 
-                // 클라우드 데이터를 trainedSigns에 로드
                 trainedSigns = {};
                 data.forEach(item => {
                     trainedSigns[item.word] = {
                         features: JSON.parse(item.features),
                         timestamp: new Date(item.created_at).getTime(),
-                        fromCloud: true // 클라우드에서 온 데이터임을 표시
+                        fromCloud: true
                     };
                 });
 
                 updateTrainedWordsList();
                 console.log(`${data.length}개 수어 클라우드에서 불러오기 완료`);
 
-                // 로컬에도 백업 저장
                 saveToLocalStorage();
 
             } catch (error) {
@@ -516,7 +536,6 @@
             }
         }
 
-        // 클라우드에서 삭제
         async function removeFromCloud(word) {
             if (!isSupabaseEnabled) return;
 
@@ -536,7 +555,6 @@
             }
         }
 
-        // 전역 변수
         let hands;
         let isDetecting = false;
         let isRecording = false;
@@ -545,8 +563,9 @@
         let recognizedWords = [];
         let currentRecording = null;
         let recordingInterval = null;
+        let mediaRecorder = null;
+        let recordedChunks = [];
 
-        // MediaPipe Hands 초기화
         function initializeHands() {
             hands = new Hands({
                 locateFile: (file) => {
@@ -556,37 +575,104 @@
 
             hands.setOptions({
                 maxNumHands: 2,
-                modelComplexity: 1,
-                minDetectionConfidence: 0.7,
+                modelComplexity: 0,
+                minDetectionConfidence: 0.6,
                 minTrackingConfidence: 0.5
             });
 
             hands.onResults(onHandsResults);
         }
 
-        // 랜드마크를 특징 벡터로 변환
+        // 수정된 특징 추출 함수
         function extractFeatures(landmarks) {
             if (!landmarks || landmarks.length === 0) return null;
             
             const features = [];
+            let firstWrist = null;
             
-            landmarks.forEach(hand => {
+            landmarks.forEach((hand, handIndex) => {
                 const wrist = hand[0];
+                if (handIndex === 0) firstWrist = wrist;
+                
                 const normalizedHand = hand.map(point => ({
                     x: point.x - wrist.x,
                     y: point.y - wrist.y,
                     z: point.z - wrist.z
                 }));
                 
+                // 1. 기본 좌표
                 for (let i = 0; i < normalizedHand.length; i++) {
                     features.push(normalizedHand[i].x, normalizedHand[i].y, normalizedHand[i].z);
                 }
+                
+                // 2. 손가락 끝 간 거리
+                const fingerTips = [4, 8, 12, 16, 20];
+                for (let i = 0; i < fingerTips.length; i++) {
+                    for (let j = i + 1; j < fingerTips.length; j++) {
+                        const p1 = normalizedHand[fingerTips[i]];
+                        const p2 = normalizedHand[fingerTips[j]];
+                        const distance = Math.sqrt(
+                            Math.pow(p1.x - p2.x, 2) + 
+                            Math.pow(p1.y - p2.y, 2) + 
+                            Math.pow(p1.z - p2.z, 2)
+                        );
+                        features.push(distance);
+                    }
+                }
+                
+                // 3. 손가락 굽힘 각도
+                const fingerJoints = [
+                    [0, 1, 2, 3, 4],
+                    [0, 5, 6, 7, 8],
+                    [0, 9, 10, 11, 12],
+                    [0, 13, 14, 15, 16],
+                    [0, 17, 18, 19, 20]
+                ];
+                
+                fingerJoints.forEach(joints => {
+                    for (let i = 0; i < joints.length - 2; i++) {
+                        const p1 = normalizedHand[joints[i]];
+                        const p2 = normalizedHand[joints[i + 1]];
+                        const p3 = normalizedHand[joints[i + 2]];
+                        
+                        const v1 = { x: p2.x - p1.x, y: p2.y - p1.y, z: p2.z - p1.z };
+                        const v2 = { x: p3.x - p2.x, y: p3.y - p2.y, z: p3.z - p2.z };
+                        
+                        const dot = v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
+                        const len1 = Math.sqrt(v1.x * v1.x + v1.y * v1.y + v1.z * v1.z);
+                        const len2 = Math.sqrt(v2.x * v2.x + v2.y * v2.y + v2.z * v2.z);
+                        
+                        const angle = len1 > 0 && len2 > 0 ? dot / (len1 * len2) : 0;
+                        features.push(angle);
+                    }
+                });
+
+                // 4. 손바닥 크기
+                const palmSize = Math.sqrt(
+                    Math.pow(normalizedHand[5].x - normalizedHand[17].x, 2) +
+                    Math.pow(normalizedHand[5].y - normalizedHand[17].y, 2)
+                );
+                features.push(palmSize);
+                
+                // 5. 각 손가락 펼침 정도
+                fingerTips.forEach(tip => {
+                    const distance = Math.sqrt(
+                        Math.pow(normalizedHand[tip].x, 2) +
+                        Math.pow(normalizedHand[tip].y, 2) +
+                        Math.pow(normalizedHand[tip].z, 2)
+                    );
+                    features.push(distance);
+                });
             });
+
+            // 첫 번째 손의 손목 위치 추가
+            if (firstWrist) {
+                features.push(firstWrist.x, firstWrist.y, firstWrist.z);
+            }
             
             return features;
         }
 
-        // 두 특징 벡터 간 유사도 계산
         function calculateSimilarity(features1, features2) {
             if (!features1 || !features2) return 0;
             if (features1.length !== features2.length) return 0;
@@ -609,7 +695,6 @@
             return dotProduct / (norm1 * norm2);
         }
 
-        // DTW 알고리즘
         function dtw(seq1, seq2) {
             const n = seq1.length;
             const m = seq2.length;
@@ -631,47 +716,72 @@
             return dtw[n][m] / Math.max(n, m);
         }
 
-        // 수어 인식
         function recognizeSign(currentFeatures) {
             let bestMatch = null;
             let bestSimilarity = 0;
-            const threshold = 0.85;
+            const threshold = 0.65;
+            const minFrames = 15;
+            
+            if (recentFrames.length < minFrames) {
+                return null;
+            }
             
             for (const [word, signData] of Object.entries(trainedSigns)) {
-                if (!signData.features || signData.features.length === 0) continue;
+                if (!signData.features || signData.features.length < minFrames) {
+                    continue;
+                }
                 
-                const similarity = calculateSimilarity(currentFeatures, signData.features[signData.features.length - 1]);
+                const dtwDistance = dtw(
+                    recentFrames.slice(-25),
+                    signData.features
+                );
+                
+                const similarity = Math.max(0, 1 - dtwDistance);
                 
                 if (similarity > bestSimilarity) {
                     bestSimilarity = similarity;
                     bestMatch = word;
                 }
-                
-                if (signData.features.length > 5 && recentFrames.length > 5) {
-                    const sequenceSimilarity = 1 - dtw(
-                        recentFrames.slice(-Math.min(10, recentFrames.length)),
-                        signData.features.slice(-Math.min(10, signData.features.length))
-                    );
-                    
-                    if (sequenceSimilarity > bestSimilarity) {
-                        bestSimilarity = sequenceSimilarity;
-                        bestMatch = word;
-                    }
-                }
             }
             
             if (bestSimilarity > threshold) {
+                let secondBestSimilarity = 0;
+                for (const [word, signData] of Object.entries(trainedSigns)) {
+                    if (word === bestMatch) continue;
+                    if (!signData.features || signData.features.length < minFrames) {
+                        continue;
+                    }
+                    
+                    const dtwDistance = dtw(
+                        recentFrames.slice(-25),
+                        signData.features
+                    );
+                    const similarity = Math.max(0, 1 - dtwDistance);
+                    
+                    if (similarity > secondBestSimilarity) {
+                        secondBestSimilarity = similarity;
+                    }
+                }
+                
+                const confidenceGap = bestSimilarity - secondBestSimilarity;
+                if (confidenceGap < 0.05) {
+                    console.log(`불확실한 인식: ${bestMatch} (차이: ${(confidenceGap * 100).toFixed(1)}%)`);
+                    return { word: bestMatch, confidence: bestSimilarity };
+                }
+                
                 return { word: bestMatch, confidence: bestSimilarity };
             }
             
             return null;
         }
 
-        // 최근 프레임 저장
         let recentFrames = [];
-        const MAX_FRAMES = 30;
+        const MAX_FRAMES = 40;
+        let lastProcessTime = 0;
+        const PROCESS_INTERVAL = 300;
+        const MIN_CONFIDENCE_THRESHOLD = 0.65;
+        const MIN_RECOGNITION_FRAMES = 15;
 
-        // 손 인식 결과 처리
         function onHandsResults(results) {
             drawHandLandmarks(results);
             
@@ -680,10 +790,17 @@
                     document.getElementById('currentSign').textContent = '손이 감지되지 않음';
                     document.getElementById('confidence').textContent = '신뢰도: 0%';
                 }
+                if (isRecognizing && recentFrames.length > 0) {
+                    recentFrames = [];
+                }
                 return;
             }
             
             const features = extractFeatures(results.multiHandLandmarks);
+            
+            if (!features) {
+                return;
+            }
             
             if (isRecording && currentRecording) {
                 currentRecording.features.push(features);
@@ -691,30 +808,41 @@
             }
             
             if (isRecognizing && !isRecording) {
+                const now = Date.now();
+                if (now - lastProcessTime < PROCESS_INTERVAL) {
+                    return;
+                }
+                lastProcessTime = now;
+
                 recentFrames.push(features);
                 if (recentFrames.length > MAX_FRAMES) {
                     recentFrames.shift();
                 }
                 
-                const recognition = recognizeSign(features);
-                
-                if (recognition) {
-                    document.getElementById('currentSign').textContent = recognition.word;
-                    document.getElementById('confidence').textContent = 
-                        `신뢰도: ${Math.round(recognition.confidence * 100)}%`;
+                if (recentFrames.length >= MIN_RECOGNITION_FRAMES) {
+                    const recognition = recognizeSign(features);
                     
-                    addRecognizedWord(recognition.word);
-                    
-                    document.getElementById('currentText').textContent = recognition.word;
-                    document.getElementById('currentText').style.color = '#00ff00';
+                    if (recognition && recognition.confidence >= MIN_CONFIDENCE_THRESHOLD) {
+                        document.getElementById('currentSign').textContent = recognition.word;
+                        document.getElementById('confidence').textContent = 
+                            `신뢰도: ${Math.round(recognition.confidence * 100)}%`;
+                        
+                        addRecognizedWord(recognition.word);
+                        
+                        document.getElementById('currentText').textContent = recognition.word;
+                        document.getElementById('currentText').style.color = '#00ff00';
+                    } else {
+                        document.getElementById('currentSign').textContent = '인식 중...';
+                        document.getElementById('confidence').textContent = 
+                            recognition ? `신뢰도: ${Math.round(recognition.confidence * 100)}% (낮음)` : '신뢰도: 낮음';
+                    }
                 } else {
-                    document.getElementById('currentSign').textContent = '인식 중...';
-                    document.getElementById('confidence').textContent = '신뢰도: 낮음';
+                    document.getElementById('currentSign').textContent = '손동작 수집 중...';
+                    document.getElementById('confidence').textContent = `프레임: ${recentFrames.length}/${MIN_RECOGNITION_FRAMES}`;
                 }
             }
         }
 
-        // 손 랜드마크 그리기
         function drawHandLandmarks(results) {
             const canvas = document.getElementById('canvasOverlay');
             const video = document.getElementById('videoElement');
@@ -769,7 +897,6 @@
             }
         }
 
-        // 카메라 시작
         async function startCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
@@ -794,7 +921,6 @@
             }
         }
 
-        // 카메라 시작/중지
         async function startDetection() {
             const startBtn = document.getElementById('startBtn');
             const recordBtn = document.getElementById('recordBtn');
@@ -845,7 +971,6 @@
             }
         }
 
-        // 녹화 시작/중지
         function toggleRecording() {
             const recordBtn = document.getElementById('recordBtn');
             const wordInput = document.getElementById('wordInput');
@@ -859,8 +984,29 @@
                     return;
                 }
                 
-                // 녹화 시작
                 isRecording = true;
+                recordedChunks = [];
+                
+                // MediaRecorder로 비디오 녹화 시작
+                const video = document.getElementById('videoElement');
+                const stream = video.srcObject;
+                
+                try {
+                    mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'video/webm;codecs=vp8,opus'
+                    });
+                    
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            recordedChunks.push(event.data);
+                        }
+                    };
+                    
+                    mediaRecorder.start();
+                } catch (error) {
+                    console.error('MediaRecorder 시작 실패:', error);
+                }
+                
                 currentRecording = {
                     word: word,
                     features: [],
@@ -868,13 +1014,12 @@
                     startTime: Date.now()
                 };
                 
-                recordBtn.textContent = '녹화 중지 (3초)';
+                recordBtn.textContent = '녹화 중지 (5초)';
                 recordBtn.classList.add('recording-indicator');
                 status.textContent = `"${word}" 녹화 중...`;
                 status.className = 'status recording';
                 wordInput.disabled = true;
                 
-                // 3초 녹화 진행률 표시
                 let progress = 0;
                 recordingInterval = setInterval(() => {
                     progress += 10;
@@ -884,17 +1029,21 @@
                         clearInterval(recordingInterval);
                         stopRecording();
                     }
-                }, 300);
+                }, 250);
                 
             } else {
                 stopRecording();
             }
         }
 
-        // 녹화 중지 및 클라우드 저장
         async function stopRecording() {
             if (recordingInterval) {
                 clearInterval(recordingInterval);
+            }
+            
+            // MediaRecorder 중지
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
             }
             
             isRecording = false;
@@ -909,7 +1058,18 @@
             progressBar.style.width = '0%';
             
             if (currentRecording && currentRecording.features.length > 0) {
-                // 학습 데이터 저장
+                status.textContent = '비디오 처리 중...';
+                status.className = 'status cloud';
+                
+                // 비디오 Blob 생성 (MediaRecorder가 완료될 때까지 대기)
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                let videoBlob = null;
+                if (recordedChunks.length > 0) {
+                    videoBlob = new Blob(recordedChunks, { type: 'video/webm' });
+                    console.log(`비디오 크기: ${(videoBlob.size / 1024 / 1024).toFixed(2)} MB`);
+                }
+                
                 const signData = {
                     features: currentRecording.features,
                     landmarks: currentRecording.landmarks,
@@ -919,15 +1079,14 @@
                 
                 trainedSigns[currentRecording.word] = signData;
                 
-                // 로컬 저장
                 saveToLocalStorage();
                 
-                // 클라우드 자동 저장
-                const cloudSaved = await saveToCloudAuto(currentRecording.word, signData);
+                // 비디오와 함께 클라우드에 저장
+                const cloudSaved = await saveToCloudAuto(currentRecording.word, signData, videoBlob);
                 
                 if (cloudSaved) {
                     trainedSigns[currentRecording.word].fromCloud = true;
-                    status.textContent = `"${currentRecording.word}" 학습 완료! (클라우드 저장됨)`;
+                    status.textContent = `"${currentRecording.word}" 학습 완료! (클라우드 저장됨${videoBlob ? ' + 비디오' : ''})`;
                     status.className = 'status cloud';
                 } else {
                     status.textContent = `"${currentRecording.word}" 학습 완료! (로컬 저장됨)`;
@@ -936,7 +1095,6 @@
                 
                 updateTrainedWordsList();
                 
-                // 입력 필드 초기화
                 wordInput.value = '';
             } else {
                 status.textContent = '녹화 실패 - 손이 감지되지 않음';
@@ -944,9 +1102,9 @@
             }
             
             currentRecording = null;
+            recordedChunks = [];
         }
 
-        // 인식 모드 토글
         function toggleRecognition() {
             const recognitionBtn = document.getElementById('recognitionBtn');
             const status = document.getElementById('status');
@@ -974,7 +1132,6 @@
             }
         }
 
-        // 학습된 단어 목록 업데이트
         function updateTrainedWordsList() {
             const listElement = document.getElementById('trainedWordsList');
             const words = Object.keys(trainedSigns);
@@ -997,7 +1154,6 @@
             });
         }
 
-        // 학습된 단어 삭제
         async function removeTrainedWord(word) {
             if (confirm(`"${word}" 수어를 삭제하시겠습니까?`)) {
                 const wasFromCloud = trainedSigns[word].fromCloud;
@@ -1006,21 +1162,20 @@
                 updateTrainedWordsList();
                 saveToLocalStorage();
                 
-                // 클라우드에서도 삭제
                 if (wasFromCloud) {
                     await removeFromCloud(word);
                 }
             }
         }
 
-        // 인식된 단어 추가
         let lastRecognizedWord = '';
         let lastRecognizedTime = 0;
+        const RECOGNITION_COOLDOWN = 2000;
         
         function addRecognizedWord(word) {
             const now = Date.now();
             
-            if (word === lastRecognizedWord && now - lastRecognizedTime < 2000) {
+            if (word === lastRecognizedWord && (now - lastRecognizedTime) < RECOGNITION_COOLDOWN) {
                 return;
             }
             
@@ -1037,7 +1192,6 @@
             updateRecognizedWordsList();
         }
 
-        // 인식된 단어 목록 업데이트
         function updateRecognizedWordsList() {
             const listElement = document.getElementById('recognizedWordsList');
             
@@ -1062,13 +1216,11 @@
             });
         }
 
-        // 인식된 단어 삭제
         function removeRecognizedWord(id) {
             recognizedWords = recognizedWords.filter(word => word.id !== id);
             updateRecognizedWordsList();
         }
 
-        // 인식 기록 전체 삭제
         function clearRecognizedWords() {
             if (recognizedWords.length === 0) return;
             
@@ -1080,7 +1232,6 @@
             }
         }
 
-        // 시간 포맷팅
         function formatTime(timestamp) {
             const now = new Date();
             const time = new Date(timestamp);
@@ -1095,7 +1246,6 @@
             }
         }
 
-        // LocalStorage에 저장
         function saveToLocalStorage() {
             try {
                 const data = {
@@ -1118,7 +1268,6 @@
             }
         }
 
-        // LocalStorage에서 불러오기
         function loadFromLocalStorage() {
             try {
                 const saved = localStorage.getItem('signLanguageData');
@@ -1133,7 +1282,6 @@
             }
         }
 
-        // 초기화
         window.addEventListener('load', async () => {
             console.log('수어 학습 및 인식 시스템 초기화');
             
@@ -1141,15 +1289,12 @@
             status.textContent = 'Supabase 연결 중...';
             status.className = 'status cloud';
             
-            // Supabase 초기화
             initializeSupabase();
             
-            // MediaPipe 로딩 대기
             setTimeout(async () => {
                 if (typeof Hands !== 'undefined') {
                     initializeHands();
                     
-                    // 클라우드 또는 로컬에서 데이터 불러오기
                     await loadFromCloudAuto();
                     
                     status.textContent = isSupabaseEnabled ? 
@@ -1163,7 +1308,6 @@
             }, 2000);
         });
 
-        // 페이지 떠날 때 자동 저장
         window.addEventListener('beforeunload', () => {
             if (Object.keys(trainedSigns).length > 0) {
                 saveToLocalStorage();
@@ -1172,4 +1316,3 @@
     </script>
 </body>
 </html>
-
