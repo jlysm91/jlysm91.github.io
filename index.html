@@ -7,7 +7,12 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1620248257/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
+    
     <style>
         body {
             font-family: 'Arial', sans-serif;
@@ -187,7 +192,7 @@
         }
 
         .cloud-indicator {
-            background: rgba(76, 175, 80, 0.6);
+            background: rgba(255, 193, 7, 0.8);
             color: white;
             padding: 2px 6px;
             border-radius: 10px;
@@ -308,8 +313,8 @@
         }
 
         .status.cloud {
-            background: rgba(156, 39, 176, 0.2);
-            color: #9C27B0;
+            background: rgba(255, 193, 7, 0.2);
+            color: #FFC107;
         }
 
         .recording-progress {
@@ -377,7 +382,7 @@
                 </div>
                 
                 <div id="trainedWordsList" class="trained-words-list">
-                    <div class="empty-message">클라우드에서 데이터를 불러오는 중...</div>
+                    <div class="empty-message">Firebase에서 데이터를 불러오는 중...</div>
                 </div>
             </div>
             
@@ -399,159 +404,122 @@
     </div>
 
     <script>
-        const SUPABASE_URL = 'https://qmddevysfschoeairtjg.supabase.co';
-        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFtZGRldnlzZnNjaG9lYWlydGpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg5OTM3NzAsImV4cCI6MjA3NDU2OTc3MH0.aGrQq1-VPSEv3yXUjpDlk_LkEarq3ZwCY86JKIhFW5s';
+        // Firebase 설정 - 여기에 본인의 Firebase 프로젝트 정보를 입력하세요
+        const firebaseConfig = {
+            apiKey: "AIzaSyBAupMPBlNPPKPJM4Z4Jt-WAbPjSLwl2tY",
+            authDomain: "korea-sign-language.firebaseapp.com",
+            projectId: "korea-sign-language",
+            storageBucket: "korea-sign-language.firebasestorage.app",
+            messagingSenderId: "510105278291",
+            appId: "1:510105278291:web:d6e8c23aa8fa9b19d133a6"
+        };
         
-        let supabase;
-        let isSupabaseEnabled = false;
+        let db;
+        let storage;
+        let isFirebaseEnabled = false;
 
-        function initializeSupabase() {
+        function initializeFirebase() {
             try {
-                if (SUPABASE_URL === 'YOUR_SUPABASE_URL' || SUPABASE_ANON_KEY === 'YOUR_SUPABASE_ANON_KEY') {
-                    console.warn('Supabase 설정이 필요합니다. 로컬 저장소를 사용합니다.');
-                    isSupabaseEnabled = false;
+                if (firebaseConfig.apiKey === 'YOUR_API_KEY') {
+                    console.warn('Firebase 설정이 필요합니다. 로컬 저장소를 사용합니다.');
+                    isFirebaseEnabled = false;
                     return false;
                 }
                 
-                supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-                isSupabaseEnabled = true;
-                console.log('Supabase 연결 성공');
+                firebase.initializeApp(firebaseConfig);
+                db = firebase.firestore();
+                storage = firebase.storage();
+                isFirebaseEnabled = true;
+                console.log('Firebase 연결 성공');
                 return true;
             } catch (error) {
-                console.error('Supabase 초기화 실패:', error);
-                isSupabaseEnabled = false;
+                console.error('Firebase 초기화 실패:', error);
+                isFirebaseEnabled = false;
                 return false;
             }
         }
 
-        async function saveToCloudAuto(word, signData, videoBlob = null) {
-            if (!isSupabaseEnabled) return false;
+        async function saveToFirebase(word, signData, videoBlob = null) {
+            if (!isFirebaseEnabled) return false;
 
             try {
                 let videoUrl = null;
                 
-                // 비디오가 있으면 Storage에 업로드
                 if (videoBlob) {
-                    const fileName = `video_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.webm`;
-                    const { data: uploadData, error: uploadError } = await supabase
-                        .storage
-                        .from('sign-videos')
-                        .upload(fileName, videoBlob, {
-                            contentType: 'video/webm',
-                            upsert: false
-                        });
-
-                    if (uploadError) {
-                        console.error('비디오 업로드 실패:', uploadError);
-                    } else {
-                        // Public URL 가져오기
-                        const { data: urlData } = supabase
-                            .storage
-                            .from('sign-videos')
-                            .getPublicUrl(fileName);
-                        videoUrl = urlData.publicUrl;
-                        console.log('비디오 업로드 완료:', videoUrl);
-                    }
+                    const fileName = `videos/${Date.now()}_${word}.webm`;
+                    const storageRef = storage.ref(fileName);
+                    
+                    const uploadTask = await storageRef.put(videoBlob);
+                    videoUrl = await uploadTask.ref.getDownloadURL();
+                    console.log('비디오 업로드 완료:', videoUrl);
                 }
 
                 const dataToSave = {
                     word: word,
-                    features: JSON.stringify(signData.features),
-                    timestamp: new Date(signData.timestamp).toISOString(),
-                    video_url: videoUrl
+                    features: signData.features,
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+                    videoUrl: videoUrl,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                 };
 
-                const { data: existing } = await supabase
-                    .from('sign_language_data')
-                    .select('id')
-                    .eq('word', word)
-                    .single();
-
-                let result;
-                if (existing) {
-                    result = await supabase
-                        .from('sign_language_data')
-                        .update(dataToSave)
-                        .eq('word', word);
-                } else {
-                    result = await supabase
-                        .from('sign_language_data')
-                        .insert([dataToSave]);
-                }
-
-                if (result.error) {
-                    throw result.error;
-                }
-
-                console.log(`"${word}" 클라우드 저장 완료${videoUrl ? ' (비디오 포함)' : ''}`);
+                await db.collection('signLanguageData').doc(word).set(dataToSave, { merge: true });
+                
+                console.log(`"${word}" Firebase 저장 완료${videoUrl ? ' (비디오 포함)' : ''}`);
                 return true;
 
             } catch (error) {
-                console.error('클라우드 자동 저장 실패:', error);
+                console.error('Firebase 저장 실패:', error);
                 return false;
             }
         }
 
-        async function loadFromCloudAuto() {
-            if (!isSupabaseEnabled) {
+        async function loadFromFirebase() {
+            if (!isFirebaseEnabled) {
                 loadFromLocalStorage();
                 return;
             }
 
             try {
-                const { data, error } = await supabase
-                    .from('sign_language_data')
-                    .select('*')
-                    .order('created_at', { ascending: false });
+                const snapshot = await db.collection('signLanguageData')
+                    .orderBy('updatedAt', 'desc')
+                    .get();
 
-                if (error) {
-                    console.error('클라우드 불러오기 실패:', error);
-                    loadFromLocalStorage();
-                    return;
-                }
-
-                if (!data || data.length === 0) {
-                    console.log('클라우드에 저장된 데이터가 없음');
+                if (snapshot.empty) {
+                    console.log('Firebase에 저장된 데이터가 없음');
                     loadFromLocalStorage();
                     return;
                 }
 
                 trainedSigns = {};
-                data.forEach(item => {
-                    trainedSigns[item.word] = {
-                        features: JSON.parse(item.features),
-                        timestamp: new Date(item.created_at).getTime(),
-                        fromCloud: true
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    trainedSigns[data.word] = {
+                        features: data.features,
+                        timestamp: data.timestamp?.toMillis() || Date.now(),
+                        fromCloud: true,
+                        videoUrl: data.videoUrl
                     };
                 });
 
                 updateTrainedWordsList();
-                console.log(`${data.length}개 수어 클라우드에서 불러오기 완료`);
-
+                console.log(`${snapshot.size}개 수어 Firebase에서 불러오기 완료`);
+                
                 saveToLocalStorage();
 
             } catch (error) {
-                console.error('클라우드 자동 불러오기 실패:', error);
+                console.error('Firebase 불러오기 실패:', error);
                 loadFromLocalStorage();
             }
         }
 
-        async function removeFromCloud(word) {
-            if (!isSupabaseEnabled) return;
+        async function removeFromFirebase(word) {
+            if (!isFirebaseEnabled) return;
 
             try {
-                const { error } = await supabase
-                    .from('sign_language_data')
-                    .delete()
-                    .eq('word', word);
-
-                if (error) {
-                    console.error('클라우드 삭제 실패:', error);
-                } else {
-                    console.log(`"${word}" 클라우드에서 삭제 완료`);
-                }
+                await db.collection('signLanguageData').doc(word).delete();
+                console.log(`"${word}" Firebase에서 삭제 완료`);
             } catch (error) {
-                console.error('클라우드 삭제 실패:', error);
+                console.error('Firebase 삭제 실패:', error);
             }
         }
 
@@ -583,7 +551,6 @@
             hands.onResults(onHandsResults);
         }
 
-        // 수정된 특징 추출 함수
         function extractFeatures(landmarks) {
             if (!landmarks || landmarks.length === 0) return null;
             
@@ -600,12 +567,10 @@
                     z: point.z - wrist.z
                 }));
                 
-                // 1. 기본 좌표
                 for (let i = 0; i < normalizedHand.length; i++) {
                     features.push(normalizedHand[i].x, normalizedHand[i].y, normalizedHand[i].z);
                 }
                 
-                // 2. 손가락 끝 간 거리
                 const fingerTips = [4, 8, 12, 16, 20];
                 for (let i = 0; i < fingerTips.length; i++) {
                     for (let j = i + 1; j < fingerTips.length; j++) {
@@ -620,7 +585,6 @@
                     }
                 }
                 
-                // 3. 손가락 굽힘 각도
                 const fingerJoints = [
                     [0, 1, 2, 3, 4],
                     [0, 5, 6, 7, 8],
@@ -647,14 +611,12 @@
                     }
                 });
 
-                // 4. 손바닥 크기
                 const palmSize = Math.sqrt(
                     Math.pow(normalizedHand[5].x - normalizedHand[17].x, 2) +
                     Math.pow(normalizedHand[5].y - normalizedHand[17].y, 2)
                 );
                 features.push(palmSize);
                 
-                // 5. 각 손가락 펼침 정도
                 fingerTips.forEach(tip => {
                     const distance = Math.sqrt(
                         Math.pow(normalizedHand[tip].x, 2) +
@@ -665,7 +627,6 @@
                 });
             });
 
-            // 첫 번째 손의 손목 위치 추가
             if (firstWrist) {
                 features.push(firstWrist.x, firstWrist.y, firstWrist.z);
             }
@@ -987,7 +948,6 @@
                 isRecording = true;
                 recordedChunks = [];
                 
-                // MediaRecorder로 비디오 녹화 시작
                 const video = document.getElementById('videoElement');
                 const stream = video.srcObject;
                 
@@ -1041,7 +1001,6 @@
                 clearInterval(recordingInterval);
             }
             
-            // MediaRecorder 중지
             if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                 mediaRecorder.stop();
             }
@@ -1061,7 +1020,6 @@
                 status.textContent = '비디오 처리 중...';
                 status.className = 'status cloud';
                 
-                // 비디오 Blob 생성 (MediaRecorder가 완료될 때까지 대기)
                 await new Promise(resolve => setTimeout(resolve, 500));
                 
                 let videoBlob = null;
@@ -1081,12 +1039,11 @@
                 
                 saveToLocalStorage();
                 
-                // 비디오와 함께 클라우드에 저장
-                const cloudSaved = await saveToCloudAuto(currentRecording.word, signData, videoBlob);
+                const cloudSaved = await saveToFirebase(currentRecording.word, signData, videoBlob);
                 
                 if (cloudSaved) {
                     trainedSigns[currentRecording.word].fromCloud = true;
-                    status.textContent = `"${currentRecording.word}" 학습 완료! (클라우드 저장됨${videoBlob ? ' + 비디오' : ''})`;
+                    status.textContent = `"${currentRecording.word}" 학습 완료! (Firebase 저장됨${videoBlob ? ' + 비디오' : ''})`;
                     status.className = 'status cloud';
                 } else {
                     status.textContent = `"${currentRecording.word}" 학습 완료! (로컬 저장됨)`;
@@ -1147,7 +1104,7 @@
                 item.className = 'trained-word-item';
                 const isFromCloud = trainedSigns[word].fromCloud;
                 item.innerHTML = `
-                    <span>${word}${isFromCloud ? '<span class="cloud-indicator">☁️</span>' : ''}</span>
+                    <span>${word}${isFromCloud ? '<span class="cloud-indicator">🔥 Firebase</span>' : ''}</span>
                     <button class="remove-btn" onclick="removeTrainedWord('${word}')">삭제</button>
                 `;
                 listElement.appendChild(item);
@@ -1163,7 +1120,7 @@
                 saveToLocalStorage();
                 
                 if (wasFromCloud) {
-                    await removeFromCloud(word);
+                    await removeFromFirebase(word);
                 }
             }
         }
@@ -1286,19 +1243,19 @@
             console.log('수어 학습 및 인식 시스템 초기화');
             
             const status = document.getElementById('status');
-            status.textContent = 'Supabase 연결 중...';
+            status.textContent = 'Firebase 연결 중...';
             status.className = 'status cloud';
             
-            initializeSupabase();
+            initializeFirebase();
             
             setTimeout(async () => {
                 if (typeof Hands !== 'undefined') {
                     initializeHands();
                     
-                    await loadFromCloudAuto();
+                    await loadFromFirebase();
                     
-                    status.textContent = isSupabaseEnabled ? 
-                        '시스템 준비 완료 (클라우드 연결됨)' : 
+                    status.textContent = isFirebaseEnabled ? 
+                        '시스템 준비 완료 (Firebase 연결됨)' : 
                         '시스템 준비 완료 (로컬 모드)';
                     status.className = 'status ready';
                 } else {
