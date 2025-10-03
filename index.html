@@ -432,7 +432,7 @@
                 
                 // 비디오가 있으면 Storage에 업로드
                 if (videoBlob) {
-                    const fileName = `${word}_${Date.now()}.webm`;
+                    const fileName = `video_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.webm`;
                     const { data: uploadData, error: uploadError } = await supabase
                         .storage
                         .from('sign-videos')
