@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "example_id": "example-placeholder",
+  "revision": 1,
+  "supersedes_revision": null,
+  "updated_at": "2026-10-02T00:00:00Z",
+  "annotation_author": "signer-01",
+  "is_template": true,
+  "asset": {
+    "asset_id": "asset-placeholder",
+    "local_filename": "replace-with-your-video.mp4",
+    "sha256": null,
+    "duration_s": 10,
+    "original_preserved": true,
+    "mirrored": null
+  },
+  "capture": {
+    "signer_id": "signer-01",
+    "session_id": "session-day-a",
+    "capture_day": "2026-10-02",
+    "source_recording_id": "recording-placeholder",
+    "condition_notes": "양식 설명을 위한 가상 메타데이터. 연결된 실제 영상 없음."
+  },
+  "available_context": [
+    {
+      "text": "실제 분석 전에 이미 주어진 대화 상황만 기록합니다. 없으면 이 배열을 비웁니다.",
+      "source": "provided_before_inference"
+    }
+  ],
+  "segments": [
+    {
+      "segment_id": "segment-01",
+      "start_s": 0,
+      "end_s": 10,
+      "meaning": {
+        "literal_ko": "영상을 확인한 뒤 표현 순서와 관계를 보존해 직접 작성",
+        "natural_ko": "같은 의미를 자연스러운 한국어로 직접 작성",
+        "intent": "예: 질문/요청/설명 등 실제 표현자가 의도한 내용",
+        "referents": [],
+        "nonmanual_notes": ""
+      },
+      "uncertain_ranges": [],
+      "review": {
+        "status": "draft",
+        "reviewer_id": null,
+        "reviewed_at": null,
+        "note": "직역·의역과 시간은 아직 실제 영상에 대응하지 않는 입력 양식입니다."
+      }
+    }
+  ],
+  "evaluation": {
+    "split": "unassigned",
+    "sentence_family_id": "family-placeholder",
+    "scenario_id": "scenario-placeholder",
+    "notes": "실제 수집 후 촬영 세션과 문장군을 확인하여 분리"
+  },
+  "permissions": {
+    "local_use": false,
+    "external_inference": false,
+    "external_training": false,
+    "public_release": false
+  }
+}

@@ -2,11 +2,14 @@ import { SignStore, normalizeWord, MAX_IMPORT_BYTES } from './storage.js';
 import { SignEngine } from './engine.js';
 import { VideoSignAnalyzer } from './video-engine.js';
 import { analyzeKSLVideo } from './gemini-video.js';
+import { PersonalLibrary } from './personal-library.js';
+import { createLibraryUI } from './library-ui.js';
+import { createVideoDocument, validateVideoDocument, videoDocumentText } from './video-document.js';
 
 const $ = id => document.getElementById(id);
 const SETTINGS_KEY = 'signflow.settings.v1';
 const HISTORY_KEY = 'signflow.history.v1';
-const VIEW_NAMES = { studio: '수어 스튜디오', video: '영상에서 글로', dictionary: '나의 수어 사전', history: '연습 기록', settings: '설정' };
+const VIEW_NAMES = { library: '내 영상 자료', studio: '보조 · 동작 예시 관리', video: '영상에서 글로', dictionary: '나의 수어 사전', history: '보조 · 동작 비교 기록', settings: '설정' };
 const DEMO_WORDS = ['안녕하세요', '감사합니다', '반갑습니다'];
 const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
 const dateFormat = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
@@ -21,11 +24,33 @@ const state = {
   lastHandCount: -1, historyWarningShown: false, backupURLs: [],
 };
 const videoState = {
-  mode: 'local', file: null, url: null, duration: null, width: 0, height: 0,
+  mode: 'ai', file: null, url: null, duration: null, width: 0, height: 0,
   loading: false, busy: false, canceling: false, loadToken: 0, runToken: 0,
   loadController: null, controller: null, analyzer: null, jobPromise: null,
-  cancelPromise: Promise.resolve(), result: null, text: '', notice: '', reviewRange: null,
+  cancelPromise: Promise.resolve(), result: null, text: '', notice: '', reviewRange: null, document: null, dirty: false, nextSegment: 1, selectedSegment: null,
 };
+
+const personalLibrary = new PersonalLibrary();
+const libraryUI = createLibraryUI(personalLibrary, {
+  state: () => videoState, validate: validateVideoDocument, controls: renderVideoControls,
+  changed: () => { videoState.dirty = true; syncVideoDocument(); },
+  saved: () => { videoState.dirty = false; syncVideoDocument(); },
+  cancelOpen: () => { if (videoState.loading) run(() => cancelVideoWork('자료 열기를 취소했어요.')); },
+  navigate: () => { goTo('video'); $('main').focus({ preventScroll: true }); },
+  open: async (record, signal) => {
+    if (signal.aborted || !confirmVideoReplace()) return false;
+    const file = new File([record.video], record.fileName, { type: record.video.type });
+    await selectVideoFile(file, { fromLibrary: true, confirmed: true });
+    if (signal.aborted || videoState.file !== file || !videoState.duration || videoState.loading) return false;
+    videoState.document = structuredClone(record.document);
+    videoState.nextSegment = Math.max(0, ...record.document.segments.map(row => Number(row.id)).filter(Number.isSafeInteger)) + 1;
+    videoState.dirty = false;
+    $('videoResultLabel').textContent = '개인 영상 자료 · 검토 문서';
+    $('videoResultLimitations').textContent = record.document.limitation;
+    $('videoResultLimitations').hidden = !record.document.limitation;
+    renderVideoEditor(); syncVideoDocument(); return true;
+  },
+});
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -223,7 +248,8 @@ function setTab(tab, focus = false) {
 }
 function showView(view, focus = false) {
   if (view === 'main') return;
-  if (!VIEW_NAMES[view]) view = 'studio';
+  if (!VIEW_NAMES[view]) view = 'video';
+  libraryUI.viewChanged(view);
   if (view !== 'video' && $('uploadedVideo')) {
     stopVideoReview();
     if (videoState.busy || videoState.loading) run(() => cancelVideoWork('화면을 이동해 영상 분석을 취소했어요.'));
@@ -236,8 +262,9 @@ function showView(view, focus = false) {
     if (active) node.setAttribute('aria-current', 'page'); else node.removeAttribute('aria-current');
   });
   $('breadcrumbCurrent').textContent = VIEW_NAMES[view];
-  document.title = `${VIEW_NAMES[view]} · 수어스튜디오`;
+  document.title = `${VIEW_NAMES[view]} · 한국수어 영상 작업실`;
   if (view === 'history') renderHistory();
+  if (view === 'library' && !libraryUI.busy()) run(() => libraryUI.refresh());
   if (focus) $('main').focus({ preventScroll: true });
   if (view === 'studio' && state.lastFrame) requestAnimationFrame(() => drawFrame(state.lastFrame));
 }
@@ -586,25 +613,35 @@ function renderVideoControls() {
   $('videoLocalMode').classList.toggle('active', !ai); $('videoAIMode').classList.toggle('active', ai);
   $('videoLocalMode').setAttribute('aria-pressed', String(!ai)); $('videoAIMode').setAttribute('aria-pressed', String(ai));
   $('videoLocalMode').disabled = occupied; $('videoAIMode').disabled = occupied;
-  if ($('videoLimitLabel')) $('videoLimitLabel').textContent = `최대 ${ai ? 12 : 50}MB · 60초`;
+  if ($('videoLimitLabel')) $('videoLimitLabel').textContent = '최대 50MB · 60초';
   $('aiConnection').hidden = !ai;
   $('geminiKey').disabled = occupied; $('aiUploadConsent').disabled = occupied;
   $('videoAnalyzeBtn').disabled = occupied || !validFile || (ai ? !$('geminiKey').value.trim() || !$('aiUploadConsent').checked : !compatibleVideoSigns());
   $('videoCancelBtn').hidden = !videoState.busy;
+  setButtonLabel('videoAnalyzeBtn', videoState.busy ? '분석 중' : videoState.notice && videoState.file ? '다시 분석' : ai ? '초안 생성' : '단어 후보 분석');
+  const step = videoState.busy ? 1 : videoState.document ? 2 : videoState.file && !videoState.loading ? 1 : 0;
+  document.querySelectorAll('.video-steps li').forEach((node, index) => {
+    if (index === step) node.setAttribute('aria-current', 'step'); else node.removeAttribute('aria-current');
+  });
   $('videoCopyBtn').disabled = !videoState.text || occupied;
   $('videoDownloadBtn').disabled = !videoState.text || occupied;
+  $('videoAddSegment').disabled = occupied || !videoState.duration || videoState.loading;
+  $('videoJSONBtn').disabled = !videoState.document || Boolean(validateVideoDocument(videoState.document)) || occupied;
+  $('videoEditor').disabled = occupied;
+  $('videoReturnToSegment').disabled = occupied;
   $('videoClearBtn').disabled = !videoState.file && !videoState.result && !videoState.loading;
   $('uploadedVideo').controls = !occupied;
   $('videoUploadEmpty').hidden = Boolean(videoState.file);
   $('uploadedVideo').hidden = !videoState.file;
-  $('videoFileName').textContent = videoState.file?.name || '선택한 영상이 없어요';
+  $('videoFileName').textContent = videoState.file?.name || '영상 선택';
   $('videoFileMeta').textContent = videoState.loading ? '영상 길이와 재생 형식을 확인하고 있어요…' : videoState.file && videoState.duration ? `${videoState.duration.toFixed(1)}초 · ${(videoState.file.size / 1024 / 1024).toFixed(1)}MB · ${videoState.width} × ${videoState.height}` : '최대 60초 · 기기 내 분석 50MB / AI 초안 12MB';
   $('aiConnectionNote').textContent = 'API 키는 현재 페이지에서만 사용하며 저장하지 않아요. 업로드 동의 후 분석 버튼을 누르면 영상이 Google로 전송돼요.';
   $('videoNotice').replaceChildren();
-  const notice = videoState.notice || (videoState.file?.size > limit ? `이 모드에서는 ${ai ? 12 : 50}MB 이하의 영상을 사용해 주세요.` : ai ? '실험적인 AI 해석 초안이에요. 한국수어 번역 성능이 검증된 모델이 아니며, 모든 결과를 직접 검토해 주세요.' : compatibleVideoSigns() ? '등록한 단어의 손동작만 비교해요. 영상은 이 브라우저에서 처리하며 서버로 업로드하지 않아요.' : '먼저 나의 수어 사전에 단어와 손동작을 등록해 주세요. 등록한 단어만 영상에서 비교할 수 있어요.');
+  const notice = videoState.notice || (!videoState.file ? '영상을 선택하세요. 선택만으로 영상을 외부에 전송하지 않습니다.' : videoState.file?.size > limit ? `AI 초안은 12MB 이하만 지원합니다. 이 영상은 직접 구간을 작성하거나 용량을 줄여 주세요.` : ai ? (!$('geminiKey').value.trim() || !$('aiUploadConsent').checked ? 'AI 초안 생성은 아래 설정에서 API 키와 전송 동의가 필요합니다. 또는 구간을 추가해 직접 작성할 수 있어요.' : 'AI 초안 생성 준비가 되었어요. 초안 생성 버튼을 누르면 선택한 영상이 Google로 전송됩니다.') : compatibleVideoSigns() ? '등록한 단어의 손동작만 비교해요. 영상은 이 브라우저에서 처리하며 서버로 업로드하지 않아요.' : '먼저 나의 수어 사전에 단어와 손동작을 등록해 주세요. 등록한 단어만 영상에서 비교할 수 있어요.');
   const noticeText = element('span', '', notice);
   $('videoNotice').append(icon('info'), noticeText);
-  if (!ai) {
+  libraryUI.update();
+  if (!ai && !videoState.notice) {
     const link = element('a', 'text-button purple', ' 나의 수어 사전 보기'); link.href = '#dictionary';
     noticeText.append(link);
   }
@@ -614,15 +651,20 @@ function stopVideoReview() {
   $('uploadedVideo')?.pause();
 }
 function resetVideoResult() {
+  libraryUI.reset();
   stopVideoReview();
   $('videoResultLimitations').textContent = '';
   $('videoResultLimitations').hidden = true;
-  videoState.result = null; videoState.text = '';
+  videoState.result = null; videoState.text = ''; videoState.document = null; videoState.dirty = false; videoState.nextSegment = 1;
+  videoState.selectedSegment = null;
+  $('videoReviewNavigation').hidden = true;
+  $('videoEditStatus').textContent = '';
+  $('videoEditError').textContent = '';
   if (!$('videoTranscript')) return;
-  $('videoTranscript').textContent = '영상을 선택하고 분석을 시작하면 인식한 내용을 이곳에 표시해요.';
+  $('videoTranscript').textContent = '영상 분석 후 구간별 초안을 검토하거나, 영상을 보며 직접 내용을 작성할 수 있어요.';
   $('videoTranscript').classList.remove('has-result');
   $('videoSegments').replaceChildren();
-  $('videoResultLabel').textContent = videoState.mode === 'ai' ? 'AI 초안 · 검토 필요' : '등록한 단어 인식';
+  $('videoResultLabel').textContent = '작성 대기';
   $('videoProgress').hidden = true;
 }
 function updateVideoProgress(payload, token, mode) {
@@ -704,8 +746,9 @@ function loadVideoMetadata(url, signal) {
     video.src = url; video.load();
   });
 }
-async function selectVideoFile(file) {
-  if (!file) return;
+async function selectVideoFile(file, options = {}) {
+  if (libraryUI.busy() && !options.fromLibrary) return;
+  if (!file || (!options.confirmed && !confirmVideoReplace())) return;
   const token = ++videoState.loadToken;
   videoState.loadController?.abort(); videoState.loadController = null;
   videoState.loading = true; videoState.notice = '';
@@ -716,9 +759,9 @@ async function selectVideoFile(file) {
   cleanupUploadedVideo(); videoState.file = null; videoState.duration = null;
   renderVideoControls();
   try {
-    const limit = (videoState.mode === 'ai' ? 12 : 50) * 1024 * 1024;
+    const limit = 50 * 1024 * 1024;
     if (!file.size) throw new Error('빈 파일이에요. 수어 영상 파일을 다시 선택해 주세요.');
-    if (file.size > limit) throw new Error(`이 모드에서는 ${videoState.mode === 'ai' ? 12 : 50}MB 이하의 영상을 사용해 주세요.`);
+    if (file.size > limit) throw new Error('영상은 50MB 이하로 선택해 주세요.');
     if ((file.type && !file.type.startsWith('video/')) || (!file.type && !/\.(mp4|webm|mov|m4v|mpeg|mpg|avi|mkv)$/i.test(file.name))) throw new Error('영상 파일을 선택해 주세요. MP4 또는 WebM 형식을 권장해요.');
     videoState.file = file; videoState.url = URL.createObjectURL(file);
     const controller = new AbortController(); videoState.loadController = controller;
@@ -735,60 +778,140 @@ async function selectVideoFile(file) {
   renderVideoControls();
 }
 function setVideoMode(mode) {
-  if (videoState.busy || videoState.canceling || !['local', 'ai'].includes(mode)) return;
+  if (libraryUI.busy() || videoState.busy || videoState.canceling || !['local', 'ai'].includes(mode)) return;
   videoState.mode = mode; videoState.notice = ''; $('aiUploadConsent').checked = false;
-  resetVideoResult(); renderVideoControls();
-}
-function renderVideoResult(result, mode) {
-  const ai = mode === 'ai';
-  videoState.result = { ...result, mode };
-  const rows = [];
-  if (ai) {
-    for (const segment of Array.isArray(result.segments) ? result.segments : []) {
-      if (typeof segment.text !== 'string' || !segment.text.trim()) continue;
-      rows.push({ text: segment.text.trim(), start: segment.start, end: segment.end, uncertain: segment.uncertain === true });
-    }
-  } else {
-    for (const word of Array.isArray(result.words) ? result.words : []) {
-      try { rows.push({ text: normalizeWord(word.word), start: word.start, end: word.end, confidence: word.confidence }); } catch { /* Ignore malformed recognition output. */ }
-    }
-  }
-  $('videoResultLabel').textContent = ai ? 'AI 초안 · 검토 필요' : '등록한 단어 인식';
-  $('videoSegments').replaceChildren();
-  $('videoTranscript').textContent = rows.length ? rows.map(row => row.text).join(' ') : ai ? result.unreadableReason || '영상에서 한국수어 내용을 충분히 확인하지 못했어요. 더 선명한 영상으로 다시 시도하고 한국수어 사용자가 직접 확인해 주세요.' : '등록한 단어와 일치하는 동작을 찾지 못했어요. 영상 속 단어를 먼저 사전에 등록하고, 손 전체가 보이는 짧고 선명한 영상으로 다시 시도해 주세요.';
-  $('videoTranscript').classList.toggle('has-result', rows.length > 0);
-  rows.forEach(row => {
-    const node = element('button', 'video-segment'); node.type = 'button';
-    const start = Math.max(0, Math.min(videoState.duration, Number(row.start) || 0));
-    const end = Math.max(start, Math.min(videoState.duration, Number(row.end) || start));
-    node.append(element('span', 'segment-time', `${formatVideoTime(start)}–${formatVideoTime(end)}`), element('span', 'segment-text', row.text));
-    if (ai && row.uncertain) node.append(element('span', 'small-tag', '해석 불확실 · 확인 필요'));
-    else if (!ai && Number.isFinite(row.confidence)) node.append(element('span', 'small-tag', `일치도 ${Math.round(Math.max(0, Math.min(1, row.confidence)) * 100)}%`));
-    node.setAttribute('aria-label', `${formatVideoTime(start)}부터 ${formatVideoTime(end)}까지 영상 확인: ${row.text}`);
-    node.addEventListener('click', () => {
-      if (videoState.busy || videoState.canceling) return;
-      stopVideoReview();
-      const video = $('uploadedVideo');
-      video.currentTime = start;
-      const range = { end };
-      videoState.reviewRange = range;
-      video.play().catch(() => { if (videoState.reviewRange === range) videoState.reviewRange = null; });
-    });
-    $('videoSegments').append(node);
-  });
-  const limitation = ai ? result.unreadableReason || '' : '';
-  $('videoResultLimitations').textContent = limitation ? `판독하지 못한 부분 · ${limitation}` : '';
-  $('videoResultLimitations').hidden = !limitation;
-  const header = ai ? 'AI 초안 · 검토 필요\n한국수어 번역 성능이 검증되지 않은 실험 결과입니다.' : '등록한 단어 인식 · 수어 영상 분석\n일치도는 저장한 예시와의 유사성이며 정확도나 번역 성능이 아닙니다.';
-  const transcript = rows.length ? rows.map(row => `${formatVideoTime(row.start)}–${formatVideoTime(row.end)} ${row.text}${ai ? ' [해석 불확실 · 확인 필요]' : ''}`).join('\n') : $('videoTranscript').textContent;
-  videoState.text = `${header}\n\n${transcript}${rows.length && limitation ? `\n\n판독하지 못한 부분: ${limitation}` : ''}`;
-  $('videoProgress').hidden = false; $('videoProgress').classList.remove('is-indeterminate');
-  $('videoProgressBar').parentElement?.classList.remove('indeterminate');
-  $('videoProgressBar').style.width = ai ? '0%' : '100%';
-  $('videoProgressText').textContent = ai ? 'AI 해석 초안을 받았어요. 원본 영상과 비교해 직접 검토해 주세요.' : `${result.framesAnalyzed || 0}개 프레임 분석 완료 · ${rows.length}개 단어 인식`;
   renderVideoControls();
 }
+function confirmVideoReplace() {
+  return !videoState.dirty || window.confirm('저장하지 않은 수정 내용이 있어요. 내용을 버리고 계속할까요?');
+}
+function syncVideoDocument() {
+  const doc = videoState.document;
+  if (!doc) return;
+  const error = validateVideoDocument(doc);
+  $('videoEditError').textContent = error;
+  videoState.text = error ? '' : videoDocumentText(doc);
+  const rows = [...doc.segments].sort((a, b) => a.start - b.start);
+  $('videoTranscript').textContent = rows.some(row => row.text.trim()) ? rows.map(row => row.text.trim() || '[내용 확인 필요]').join(' ') : '아직 작성된 변환문이 없어요. 구간을 추가하거나 초안을 검토해 주세요.';
+  $('videoTranscript').classList.toggle('has-result', rows.some(row => row.text.trim()));
+  const selected = doc.segments.find(row => row.id === videoState.selectedSegment);
+  if (selected) $('videoReviewStatus').textContent = error ? '구간의 시간 범위를 확인해 주세요.' : `${doc.segments.indexOf(selected) + 1}번 구간 · ${formatVideoTime(selected.start)}–${formatVideoTime(selected.end)}`;
+  const pending = rows.filter(row => !row.reviewed || !row.text.trim() || row.uncertainty?.trim()).length;
+  $('videoEditStatus').textContent = `${rows.length ? `${rows.length}개 구간 · ${pending}개 검토 필요` : '작성된 구간 없음'}${videoState.dirty ? ' · 저장하지 않은 문서' : ''}`;
+  renderVideoControls();
+}
+function playVideoSegment(row) {
+  if (videoState.busy || videoState.canceling || validateVideoDocument({ ...videoState.document, segments: [row] })) return;
+  stopVideoReview();
+  const video = $('uploadedVideo'), range = { end: row.end };
+  video.currentTime = row.start; videoState.reviewRange = range;
+  videoState.selectedSegment = row.id;
+  const number = videoState.document.segments.indexOf(row) + 1;
+  $('videoReviewNavigation').hidden = false;
+  $('videoReviewStatus').textContent = `${number}번 구간 · ${formatVideoTime(row.start)}–${formatVideoTime(row.end)}`;
+  $('videoSegments').querySelectorAll('.segment-editor').forEach(node => {
+    node.classList.toggle('selected', node.dataset.segmentId === String(row.id));
+  });
+  if (window.matchMedia('(max-width: 760px)').matches) video.scrollIntoView({ block: 'start' });
+  video.play().catch(() => { if (videoState.reviewRange === range) videoState.reviewRange = null; });
+}
+function renderVideoEditor() {
+  const doc = videoState.document;
+  $('videoSegments').replaceChildren();
+  if (!doc) return;
+  doc.segments.forEach((row, index) => {
+    const node = element('section', 'segment-editor');
+    node.dataset.segmentId = String(row.id);
+    node.classList.toggle('selected', videoState.selectedSegment === row.id);
+    const title = element('div', 'segment-heading');
+    const play = button(`${index + 1}번 구간 재생`, 'video-segment', () => playVideoSegment(row), 'play');
+    title.append(play, button('삭제', 'text-button', () => {
+      doc.segments = doc.segments.filter(item => item !== row); videoState.dirty = true;
+      if (videoState.selectedSegment === row.id) { videoState.selectedSegment = null; $('videoReviewNavigation').hidden = true; }
+      stopVideoReview(); renderVideoEditor(); syncVideoDocument();
+    }));
+    node.append(title);
+    const times = element('div', 'segment-times');
+    for (const [key, label] of [['start', '시작 (초)'], ['end', '끝 (초)']]) {
+      const wrapper = element('label', '', label), input = element('input', 'text-input');
+      input.type = 'number'; input.min = '0'; input.max = String(doc.duration); input.step = '0.1'; input.value = String(row[key]);
+      input.setAttribute('aria-label', `${index + 1}번 구간 ${label}`);
+      input.addEventListener('input', () => { row[key] = input.value === '' ? NaN : Number(input.value); row.reviewed = false; checked.checked = false; videoState.dirty = true; stopVideoReview(); syncVideoDocument(); });
+      wrapper.append(input); times.append(wrapper);
+    }
+    node.append(times);
+    if (row.original) node.append(element('p', 'segment-original', `${row.source === 'local' ? '참고 단어 후보 · 문장 번역 아님' : '원본 AI 초안 · 성능 미검증'}: ${row.original}`));
+    const label = element('label', 'field-label', `${index + 1}번 구간 한국어 글 · 자연스러운 의역`), input = element('textarea', 'text-input');
+    input.rows = 3; input.maxLength = 500; input.value = row.text; input.placeholder = '영상을 확인하고 한국어 내용을 작성해 주세요.';
+    input.setAttribute('aria-label', `${index + 1}번 구간 한국어 글`);
+    input.addEventListener('input', () => { row.text = input.value; row.reviewed = false; checked.checked = false; videoState.dirty = true; syncVideoDocument(); });
+    label.append(input); node.append(label);
+    const literalLabel = element('label', 'field-label', '직역 · 수어 표현 순서와 의미를 가능한 그대로'), literal = element('textarea', 'text-input');
+    literal.rows = 2; literal.maxLength = 1000; literal.value = row.literal || ''; literal.placeholder = '직역은 표준 수어 글로스가 아닙니다. 생략하거나 모호한 부분도 적어 주세요.';
+    literal.setAttribute('aria-label', `${index + 1}번 구간 직역`); literalLabel.append(literal); node.insertBefore(literalLabel, label);
+    literal.addEventListener('input', () => { row.literal = literal.value; row.reviewed = false; checked.checked = false; videoState.dirty = true; syncVideoDocument(); });
+    const details = element('details', 'annotation-details'); details.append(element('summary', '', '상황·지시 대상·불확실성 기록'));
+    for (const [key, title, placeholder] of [
+      ['context', '상황·문맥', '예: 병원 예약 시간을 변경하는 대화'],
+      ['referents', '지시 대상', '예: 화면 왼쪽 공간의 인물은 동료'],
+      ['intent', '의도', '예: 시간을 묻는 질문인지, 변경을 요청하는지'],
+      ['uncertainty', '불확실한 부분', '예: 1.2–1.8초의 날짜는 내일/다음 주 중 확인 필요'],
+    ]) {
+      const wrapper = element('label', 'field-label', title), field = element('textarea', 'text-input');
+      field.rows = 2; field.maxLength = 1000; field.value = row[key] || ''; field.placeholder = placeholder; field.setAttribute('aria-label', `${index + 1}번 구간 ${title}`);
+      field.addEventListener('input', () => { row[key] = field.value; row.reviewed = false; checked.checked = false; videoState.dirty = true; syncVideoDocument(); });
+      wrapper.append(field); details.append(wrapper);
+    }
+    node.append(details);
+    const review = element('label', 'consent-label'), checked = element('input'); checked.type = 'checkbox'; checked.checked = row.reviewed;
+    checked.addEventListener('change', () => { row.reviewed = checked.checked && Boolean(row.text.trim()); checked.checked = row.reviewed; videoState.dirty = true; syncVideoDocument(); });
+    review.append(checked, document.createTextNode('원본 영상과 대조하여 검토함')); node.append(review);
+    $('videoSegments').append(node);
+  });
+}
+function addVideoSegment() {
+  if (libraryUI.busy()) return;
+  if (!videoState.duration || videoState.busy || videoState.canceling || videoState.loading) return;
+  if (!videoState.document) {
+    videoState.document = createVideoDocument({}, 'manual', videoState.duration);
+    $('videoResultLabel').textContent = '사용자 직접 작성';
+  }
+  const doc = videoState.document;
+  if (doc.segments.length >= 100) { toast('구간은 최대 100개까지 작성할 수 있어요.', true); return; }
+  const start = Math.max(0, Math.min($('uploadedVideo').currentTime, doc.duration - 0.1));
+  doc.segments.push({ id: videoState.nextSegment++, start, end: Math.min(doc.duration, start + 3), text: '', original: '', source: 'manual', reviewed: false });
+  videoState.dirty = true; renderVideoEditor(); syncVideoDocument();
+  $('videoSegments').lastElementChild.querySelector('textarea').focus();
+}
+function renderVideoResult(result, mode) {
+  videoState.selectedSegment = null; $('videoReviewNavigation').hidden = true;
+  videoState.result = { ...result, mode };
+  videoState.document = createVideoDocument(result, mode, videoState.duration);
+  videoState.nextSegment = videoState.document.segments.length + 1;
+  videoState.dirty = true;
+  $('videoResultLabel').textContent = mode === 'ai' ? (videoState.document.segments.length ? 'AI 초안 · 검토 필요' : '자동 초안 없음') : '단어 후보 · 문장 번역 아님';
+  const limitation = result.unreadableReason || (mode === 'local' ? `${videoState.document.segments.length ? '개인 사전과 비교한 단어 후보입니다.' : '개인 사전의 단어 후보를 찾지 못했습니다.'} 한국어 문장은 원본 영상을 확인한 뒤 직접 작성해 주세요.` : '');
+  if (!videoState.document.segments.length && !limitation) videoState.document.limitation = '영상에서 한국수어 내용을 충분히 확인하지 못했어요.';
+  else videoState.document.limitation = limitation;
+  $('videoResultLimitations').textContent = videoState.document.limitation;
+  $('videoResultLimitations').hidden = !videoState.document.limitation;
+  renderVideoEditor(); syncVideoDocument();
+  $('videoProgress').hidden = false; $('videoProgress').classList.remove('is-indeterminate');
+  $('videoProgressBar').parentElement?.classList.remove('indeterminate');
+  $('videoProgressBar').style.width = '100%';
+  $('videoProgressBar').parentElement?.setAttribute('aria-valuenow', '100');
+  $('videoProgressText').textContent = mode === 'ai' ? (videoState.document.segments.length ? '초안을 받았어요. 구간별로 확인하고 한국어 글을 수정해 주세요.' : '분석을 마쳤지만 자동 초안이 없습니다. 영상을 확인하거나 직접 구간을 작성해 주세요.') : `${result.framesAnalyzed || 0}개 프레임 분석 · ${videoState.document.segments.length}개 단어 후보`;
+  renderVideoControls();
+}
+function saveVideoDocument(format) {
+  if (!videoState.document || validateVideoDocument(videoState.document) || videoState.busy || videoState.canceling) return;
+  const json = format === 'json';
+  const content = json ? JSON.stringify({ schemaVersion: 1, ...videoState.document, warning: '사용자 검토 상태이며 검증된 한국수어 번역이 아닙니다.' }, null, 2) : videoState.text;
+  download(content, `한국수어-영상-검토문서-${dayFormat.format(new Date())}.${json ? 'json' : 'txt'}`, json ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8');
+  toast('글 문서를 내려받았어요. 영상 자료의 변경은 로컬 저장으로 따로 보관해 주세요.');
+}
 async function analyzeVideo() {
+  if (libraryUI.busy()) return;
   if (videoState.busy || videoState.canceling || videoState.loading) return;
   const file = videoState.file, duration = videoState.duration, mode = videoState.mode;
   if (!file || !duration) throw new Error('먼저 60초 이하의 수어 영상 파일을 선택해 주세요.');
@@ -799,12 +922,13 @@ async function analyzeVideo() {
   const apiKey = ai ? $('geminiKey').value.trim() : '';
   if (ai && !apiKey) throw new Error('Google Gemini API 키를 입력해 주세요. 키는 이 페이지에서만 사용해요.');
   if (ai && !$('aiUploadConsent').checked) throw new Error('영상을 Google로 전송하는 데 동의한 뒤 분석을 시작해 주세요.');
+  if (!confirmVideoReplace()) return;
   const intent = videoState.runToken;
   await videoState.cancelPromise;
   if (intent !== videoState.runToken || videoState.file !== file || videoState.mode !== mode || videoState.busy || videoState.loading || videoState.canceling) return;
   const token = ++videoState.runToken;
   const controller = new AbortController(); videoState.controller = controller;
-  videoState.busy = true; videoState.notice = ''; resetVideoResult(); renderVideoControls();
+  videoState.busy = true; videoState.notice = ''; stopVideoReview(); renderVideoControls();
   $('uploadedVideo').pause();
   updateVideoProgress({ message: '영상 분석을 준비하고 있어요…' }, token, mode);
   try {
@@ -830,6 +954,8 @@ async function analyzeVideo() {
   }
 }
 async function clearVideo() {
+  if (libraryUI.busy()) return;
+  if (!confirmVideoReplace()) return;
   const token = ++videoState.loadToken;
   videoState.loadController?.abort(); videoState.loadController = null;
   await cancelVideoAnalysis('');
@@ -870,11 +996,18 @@ function bindVideoEvents() {
   $('videoCancelBtn').addEventListener('click', () => run(() => cancelVideoAnalysis()));
   $('videoClearBtn').addEventListener('click', () => run(clearVideo));
   $('videoCopyBtn').addEventListener('click', () => run(copyVideoResult));
-  $('videoDownloadBtn').addEventListener('click', () => { if (videoState.text) download(videoState.text, `수어스튜디오-영상${videoState.mode === 'ai' ? '-AI초안' : '-인식'}-${dayFormat.format(new Date())}.txt`, 'text/plain;charset=utf-8'); });
+  $('videoDownloadBtn').addEventListener('click', () => saveVideoDocument('txt'));
+  $('videoJSONBtn').addEventListener('click', () => saveVideoDocument('json'));
+  $('videoAddSegment').addEventListener('click', addVideoSegment);
+  $('videoReturnToSegment').addEventListener('click', () => {
+    const node = [...$('videoSegments').children].find(item => item.dataset.segmentId === String(videoState.selectedSegment));
+    node?.querySelector('textarea[aria-label$="구간 한국어 글"]')?.focus();
+  });
   resetVideoResult(); renderVideoControls();
 }
 
 function bindEvents() {
+  libraryUI.bind();
   bindVideoEvents();
   $('countdownScreen').setAttribute('role', 'dialog');
   $('countdownScreen').setAttribute('aria-modal', 'true');
@@ -970,13 +1103,15 @@ function bindEvents() {
     if ($('geminiKey')) $('geminiKey').value = '';
     if ('speechSynthesis' in globalThis) speechSynthesis.cancel();
   };
-  window.addEventListener('pagehide', cleanup); window.addEventListener('beforeunload', cleanup);
+  window.addEventListener('pagehide', cleanup);
+  window.addEventListener('beforeunload', event => { if (videoState.dirty || libraryUI.busy()) { event.preventDefault(); event.returnValue = ''; } });
 }
 
 async function initialize() {
   bindEvents(); applySettings(); state.history = readHistory();
   renderSentence(); renderHistory(); renderStats(); setTab('recognition'); showView(location.hash.slice(1));
   await store.init(); await refreshSigns(); renderStorage();
+  run(() => libraryUI.refresh());
   if (store.mode === 'memory') toast('브라우저 저장이 제한되어 있어요. 새로고침 전에 학습 데이터를 백업해 주세요.', true);
 }
 initialize().catch(error => {

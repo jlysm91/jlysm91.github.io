@@ -1,0 +1,368 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "개인 한국수어 영상-의미 자료 초안 v1",
+  "description": "로컬 자료 정리용 제안입니다. 업로드 동의나 학습 데이터로서의 적합성을 자동 보장하지 않습니다. 대상 영상의 meaning은 추론 입력/예시 검색 질의에서 제외합니다.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "example_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "supersedes_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "annotation_author": {
+      "type": "string",
+      "minLength": 1
+    },
+    "is_template": {
+      "type": "boolean"
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "local_filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "original_preserved": {
+          "type": "boolean"
+        },
+        "mirrored": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "asset_id",
+        "local_filename",
+        "sha256",
+        "duration_s",
+        "original_preserved",
+        "mirrored"
+      ]
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "signer_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capture_day": {
+          "type": "string",
+          "format": "date"
+        },
+        "source_recording_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "signer_id",
+        "session_id",
+        "capture_day",
+        "source_recording_id",
+        "condition_notes"
+      ]
+    },
+    "available_context": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "enum": [
+              "provided_before_inference",
+              "visible_in_video"
+            ]
+          }
+        },
+        "required": [
+          "text",
+          "source"
+        ]
+      }
+    },
+    "segments": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/segment"
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "split": {
+          "enum": [
+            "unassigned",
+            "reference",
+            "development",
+            "test"
+          ]
+        },
+        "sentence_family_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scenario_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "split",
+        "sentence_family_id",
+        "scenario_id",
+        "notes"
+      ]
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "local_use": {
+          "type": "boolean"
+        },
+        "external_inference": {
+          "type": "boolean"
+        },
+        "external_training": {
+          "type": "boolean"
+        },
+        "public_release": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "local_use",
+        "external_inference",
+        "external_training",
+        "public_release"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "example_id",
+    "revision",
+    "supersedes_revision",
+    "updated_at",
+    "annotation_author",
+    "is_template",
+    "asset",
+    "capture",
+    "available_context",
+    "segments",
+    "evaluation",
+    "permissions"
+  ],
+  "$defs": {
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "segment_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "start_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "end_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "meaning": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "literal_ko": {
+              "type": "string",
+              "description": "사용자 직역. 표준 글로스로 취급하지 않습니다."
+            },
+            "natural_ko": {
+              "type": "string",
+              "description": "의미를 보존하는 자연스러운 한국어. 추가 정보는 포함하지 않습니다."
+            },
+            "intent": {
+              "type": "string",
+              "description": "표현자가 의도한 발화 기능. 추론시 제공되는 입력이 아니라 정답 주석입니다."
+            },
+            "referents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "spatial_anchor": {
+                    "type": "string",
+                    "description": "표현자 기준 위치·역할. 모르면 빈 문자열."
+                  }
+                },
+                "required": [
+                  "id",
+                  "description",
+                  "spatial_anchor"
+                ]
+              }
+            },
+            "nonmanual_notes": {
+              "type": "string",
+              "description": "표정·시선·몸 방향 등 확인한 정보만 기록."
+            }
+          },
+          "required": [
+            "literal_ko",
+            "natural_ko",
+            "intent",
+            "referents",
+            "nonmanual_notes"
+          ]
+        },
+        "uncertain_ranges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "start_s": {
+                "type": "number",
+                "minimum": 0
+              },
+              "end_s": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "alternatives": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "start_s",
+              "end_s",
+              "reason",
+              "alternatives"
+            ]
+          }
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "draft",
+                "uncertain",
+                "signer_reviewed",
+                "independently_reviewed"
+              ]
+            },
+            "reviewer_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reviewed_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reviewer_id",
+            "reviewed_at",
+            "note"
+          ]
+        }
+      },
+      "required": [
+        "segment_id",
+        "start_s",
+        "end_s",
+        "meaning",
+        "uncertain_ranges",
+        "review"
+      ]
+    }
+  }
+}
