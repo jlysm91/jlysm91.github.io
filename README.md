@@ -1,4 +1,4 @@
-# 손끝 · 수어 스튜디오
+# 수어 스튜디오
 
 카메라로 개인 수어 동작을 등록하고, 저장한 예시와 손동작을 비교해 연습하는 정적 웹앱입니다. 한국어 화면과 PC·모바일 레이아웃을 제공합니다.
 
@@ -76,3 +76,26 @@ node tests/video-engine.test.mjs
 ```bash
 python3 scripts/build-preview.py
 ```
+
+## 2026-10-02 영상 검토 개선
+
+- 영상 지우기와 새 파일 선택이 겹칠 때 이전 정리가 새 파일을 지우지 않도록 했습니다. 분석 시작 직후 취소된 요청도 다시 시작되지 않습니다.
+- AI 초안의 일부 구간에 대한 판독 보류 이유를 화면·복사·텍스트 저장에 함께 표시합니다. 인식한 단어가 없는 결과도 이유와 함께 저장할 수 있습니다.
+- 결과의 구간 버튼은 해당 구간을 재생하고 종료 시점 부근에서 멈춥니다. 브라우저의 `timeupdate` 주기에 따라 약간의 지연이 있으며 프레임 단위 편집 기능은 아닙니다.
+- 이름과 화면 문구는 ‘수어 스튜디오’와 기능 중심의 표현으로 정리했습니다. 한국수어 성능 미검증 및 외부 전송 안내는 유지합니다.
+
+조사 자료는 기능 범위와 검토 항목을 정하는 데만 참고했습니다. [SignOrder](https://github.com/kookmin-sw/capstone-2025-30)의 카페 주문 범위, [LSTM 프로젝트](https://github.com/skidroww/realtime-sign-language-recognition-with-LSTM)의 후처리·유휴 감지 설명, [pose 도구](https://github.com/sign-language-processing/pose)의 좌표 처리 목적을 기존 개인 사전·좌표 검증·중복 억제 구현과 대조했습니다. [SSL 연구](https://aclanthology.org/2024.lrec-main.869/)는 재난 안전 한국수어 벤치마크 연구이며 이 사이트의 번역 성능 근거나 연결된 API가 아닙니다. 외부 코드·모델·데이터를 가져오지 않았고 인식 임계값이나 모델을 변경하지 않았습니다.
+
+추가 브라우저 회귀 검증은 Playwright, Chromium, FFmpeg, Python 3가 설치된 환경에서 실행합니다. Chromium 경로는 `CHROMIUM_PATH`로 바꿀 수 있습니다.
+
+```bash
+node --test tests/*.test.mjs
+node tests/engine-performance.mjs
+node tests/video-ui.browser.mjs
+node --check js/app.js
+python3 scripts/build-preview.py
+```
+
+브라우저 검증은 임시 로컬 서버에서만 테스트용 상태 접근을 추가하며 배포 코드에는 노출하지 않습니다. 합성 색상 영상, 손 미검출 모델 대역, 가짜 Gemini 응답을 사용하고 모든 외부 네트워크 요청은 가로챕니다. 파일 교체 경쟁상태, 시작 직후 취소, 반복 실행, 모델 준비 중 취소와 재시도, 모델 오류, 뒤로 이동, 잘못된 코덱, 부분·빈 결과 저장, 키보드 구간 재생, 연속 구간 선택, 390px 모바일 가로 넘침을 검사합니다. 단일 HTML 미리보기도 생성하여 로컬 HTTP에서 확인합니다. 스크린샷은 `dist/video-desktop.png`, `dist/video-mobile.png`에 저장되며 표시된 결과는 검증용 예시입니다.
+
+기존 코드의 경쟁상태 재현도 확인했습니다. `BASELINE_APP`에 수정 전 `js/app.js` 파일 경로를 주면 시작 직후 취소한 요청이 모델을 시작하지 않는지 확인하는 검사가 실패하며, 수정한 코드에서는 통과합니다. 전용 린터 설정은 없어 JavaScript 구문 검사와 `git diff --check`로 확인했습니다. 실제 MediaPipe 모델·Gemini 서비스·실사용자 한국수어 정확도·iOS Safari는 이번에 검증하지 않았습니다. 관리형 Chromium에서 `file://` 직접 열기는 정책상 차단되어 HTTP 미리보기로 확인했습니다.

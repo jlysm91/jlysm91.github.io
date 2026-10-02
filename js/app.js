@@ -24,7 +24,7 @@ const videoState = {
   mode: 'local', file: null, url: null, duration: null, width: 0, height: 0,
   loading: false, busy: false, canceling: false, loadToken: 0, runToken: 0,
   loadController: null, controller: null, analyzer: null, jobPromise: null,
-  cancelPromise: Promise.resolve(), result: null, text: '', notice: '',
+  cancelPromise: Promise.resolve(), result: null, text: '', notice: '', reviewRange: null,
 };
 
 function element(tag, className, text) {
@@ -225,7 +225,7 @@ function showView(view, focus = false) {
   if (view === 'main') return;
   if (!VIEW_NAMES[view]) view = 'studio';
   if (view !== 'video' && $('uploadedVideo')) {
-    $('uploadedVideo').pause();
+    stopVideoReview();
     if (videoState.busy || videoState.loading) run(() => cancelVideoWork('화면을 이동해 영상 분석을 취소했어요.'));
   }
   document.querySelectorAll('.view').forEach(node => {
@@ -236,7 +236,7 @@ function showView(view, focus = false) {
     if (active) node.setAttribute('aria-current', 'page'); else node.removeAttribute('aria-current');
   });
   $('breadcrumbCurrent').textContent = VIEW_NAMES[view];
-  document.title = `${VIEW_NAMES[view]} · 손끝`;
+  document.title = `${VIEW_NAMES[view]} · 수어스튜디오`;
   if (view === 'history') renderHistory();
   if (focus) $('main').focus({ preventScroll: true });
   if (view === 'studio' && state.lastFrame) requestAnimationFrame(() => drawFrame(state.lastFrame));
@@ -516,7 +516,7 @@ async function exportData() {
   const parts = await store.exportParts();
   const date = dayFormat.format(new Date());
   if (parts.length === 1) {
-    download(parts[0], `손끝-학습데이터-${date}.json`, 'application/json;charset=utf-8');
+    download(parts[0], `수어스튜디오-학습데이터-${date}.json`, 'application/json;charset=utf-8');
     toast('단어와 동작 데이터를 백업했어요. 촬영 영상은 백업 파일에 포함되지 않아요.');
     return;
   }
@@ -526,7 +526,7 @@ async function exportData() {
     const blob = new Blob([part], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob); state.backupURLs.push(url);
     const link = element('a', 'button button-outline'); link.href = url;
-    link.download = `손끝-학습데이터-${date}-${index + 1}of${parts.length}.json`;
+    link.download = `수어스튜디오-학습데이터-${date}-${index + 1}of${parts.length}.json`;
     link.append(icon('download'), document.createTextNode(`백업 ${index + 1} / ${parts.length} · ${(blob.size / 1024 / 1024).toFixed(1)}MB`));
     $('backupParts').append(link);
   });
@@ -544,8 +544,8 @@ async function importData(event) {
 }
 function downloadHistory() {
   if (!state.history.length) return;
-  const lines = ['손끝 · 연습 기록 (한국 시간)', '', ...state.history.map(entry => `${dayFormat.format(new Date(entry.timestamp))} ${timeFormat.format(new Date(entry.timestamp))} | ${entry.word} | 동작 일치도 ${Math.round(entry.confidence * 100)}%`)];
-  download(lines.join('\n'), `손끝-연습기록-${dayFormat.format(new Date())}.txt`, 'text/plain;charset=utf-8');
+  const lines = ['수어스튜디오 · 연습 기록 (한국 시간)', '', ...state.history.map(entry => `${dayFormat.format(new Date(entry.timestamp))} ${timeFormat.format(new Date(entry.timestamp))} | ${entry.word} | 동작 일치도 ${Math.round(entry.confidence * 100)}%`)];
+  download(lines.join('\n'), `수어스튜디오-연습기록-${dayFormat.format(new Date())}.txt`, 'text/plain;charset=utf-8');
   toast('연습 기록을 내려받았어요.');
 }
 function renderStorage() {
@@ -609,7 +609,14 @@ function renderVideoControls() {
     noticeText.append(link);
   }
 }
+function stopVideoReview() {
+  videoState.reviewRange = null;
+  $('uploadedVideo')?.pause();
+}
 function resetVideoResult() {
+  stopVideoReview();
+  $('videoResultLimitations').textContent = '';
+  $('videoResultLimitations').hidden = true;
   videoState.result = null; videoState.text = '';
   if (!$('videoTranscript')) return;
   $('videoTranscript').textContent = '영상을 선택하고 분석을 시작하면 인식한 내용을 이곳에 표시해요.';
@@ -662,6 +669,7 @@ async function cancelVideoAnalysis(message = '영상 분석을 취소했어요.'
   await videoState.cancelPromise;
 }
 async function cancelVideoWork(message) {
+  stopVideoReview();
   if (videoState.loading) {
     ++videoState.loadToken; videoState.loadController?.abort(); videoState.loadController = null;
     videoState.loading = false; videoState.file = null; videoState.duration = null;
@@ -669,9 +677,9 @@ async function cancelVideoWork(message) {
     videoState.notice = '영상을 불러오다가 취소했어요. 파일을 다시 선택해 주세요.';
   }
   await cancelVideoAnalysis(message);
-  $('uploadedVideo')?.pause();
 }
 function cleanupUploadedVideo() {
+  stopVideoReview();
   const video = $('uploadedVideo');
   if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
   if (videoState.url) URL.revokeObjectURL(videoState.url);
@@ -700,8 +708,9 @@ async function selectVideoFile(file) {
   if (!file) return;
   const token = ++videoState.loadToken;
   videoState.loadController?.abort(); videoState.loadController = null;
-  videoState.loading = true; videoState.notice = ''; resetVideoResult();
+  videoState.loading = true; videoState.notice = '';
   $('aiUploadConsent').checked = false;
+  resetVideoResult();
   await cancelVideoAnalysis('');
   if (token !== videoState.loadToken) return;
   cleanupUploadedVideo(); videoState.file = null; videoState.duration = null;
@@ -755,15 +764,24 @@ function renderVideoResult(result, mode) {
     node.append(element('span', 'segment-time', `${formatVideoTime(start)}–${formatVideoTime(end)}`), element('span', 'segment-text', row.text));
     if (ai && row.uncertain) node.append(element('span', 'small-tag', '해석 불확실 · 확인 필요'));
     else if (!ai && Number.isFinite(row.confidence)) node.append(element('span', 'small-tag', `일치도 ${Math.round(Math.max(0, Math.min(1, row.confidence)) * 100)}%`));
-    node.setAttribute('aria-label', `${formatVideoTime(start)}부터 영상 확인: ${row.text}`);
+    node.setAttribute('aria-label', `${formatVideoTime(start)}부터 ${formatVideoTime(end)}까지 영상 확인: ${row.text}`);
     node.addEventListener('click', () => {
       if (videoState.busy || videoState.canceling) return;
-      $('uploadedVideo').currentTime = start; $('uploadedVideo').play().catch(() => {});
+      stopVideoReview();
+      const video = $('uploadedVideo');
+      video.currentTime = start;
+      const range = { end };
+      videoState.reviewRange = range;
+      video.play().catch(() => { if (videoState.reviewRange === range) videoState.reviewRange = null; });
     });
     $('videoSegments').append(node);
   });
-  const header = ai ? 'AI 초안 · 검토 필요\n한국수어 번역 성능이 검증되지 않은 실험 결과입니다.' : '등록한 단어 인식 · 수어 영상 분석';
-  videoState.text = rows.length ? `${header}\n\n${rows.map(row => `${formatVideoTime(row.start)}–${formatVideoTime(row.end)} ${row.text}${ai && row.uncertain ? ' [해석 불확실 · 확인 필요]' : ''}`).join('\n')}` : '';
+  const limitation = ai ? result.unreadableReason || '' : '';
+  $('videoResultLimitations').textContent = limitation ? `판독하지 못한 부분 · ${limitation}` : '';
+  $('videoResultLimitations').hidden = !limitation;
+  const header = ai ? 'AI 초안 · 검토 필요\n한국수어 번역 성능이 검증되지 않은 실험 결과입니다.' : '등록한 단어 인식 · 수어 영상 분석\n일치도는 저장한 예시와의 유사성이며 정확도나 번역 성능이 아닙니다.';
+  const transcript = rows.length ? rows.map(row => `${formatVideoTime(row.start)}–${formatVideoTime(row.end)} ${row.text}${ai ? ' [해석 불확실 · 확인 필요]' : ''}`).join('\n') : $('videoTranscript').textContent;
+  videoState.text = `${header}\n\n${transcript}${rows.length && limitation ? `\n\n판독하지 못한 부분: ${limitation}` : ''}`;
   $('videoProgress').hidden = false; $('videoProgress').classList.remove('is-indeterminate');
   $('videoProgressBar').parentElement?.classList.remove('indeterminate');
   $('videoProgressBar').style.width = ai ? '0%' : '100%';
@@ -781,8 +799,9 @@ async function analyzeVideo() {
   const apiKey = ai ? $('geminiKey').value.trim() : '';
   if (ai && !apiKey) throw new Error('Google Gemini API 키를 입력해 주세요. 키는 이 페이지에서만 사용해요.');
   if (ai && !$('aiUploadConsent').checked) throw new Error('영상을 Google로 전송하는 데 동의한 뒤 분석을 시작해 주세요.');
+  const intent = videoState.runToken;
   await videoState.cancelPromise;
-  if (videoState.file !== file || videoState.mode !== mode || videoState.busy) return;
+  if (intent !== videoState.runToken || videoState.file !== file || videoState.mode !== mode || videoState.busy || videoState.loading || videoState.canceling) return;
   const token = ++videoState.runToken;
   const controller = new AbortController(); videoState.controller = controller;
   videoState.busy = true; videoState.notice = ''; resetVideoResult(); renderVideoControls();
@@ -811,8 +830,11 @@ async function analyzeVideo() {
   }
 }
 async function clearVideo() {
-  ++videoState.loadToken; videoState.loadController?.abort(); videoState.loadController = null;
+  const token = ++videoState.loadToken;
+  videoState.loadController?.abort(); videoState.loadController = null;
   await cancelVideoAnalysis('');
+  // A newer file selection owns the preview, even while old analysis closes.
+  if (token !== videoState.loadToken) return;
   cleanupUploadedVideo(); Object.assign(videoState, { file: null, duration: null, width: 0, height: 0, loading: false, notice: '' });
   $('videoFile').value = ''; $('aiUploadConsent').checked = false; $('geminiKey').value = '';
   resetVideoResult(); renderVideoControls();
@@ -830,6 +852,11 @@ async function copyVideoResult() {
 function bindVideoEvents() {
   if (!$('videoFile')) return;
   $('videoFile').addEventListener('change', event => { const file = event.target.files?.[0]; event.target.value = ''; run(() => selectVideoFile(file)); });
+  const video = $('uploadedVideo');
+  video.addEventListener('timeupdate', () => {
+    if (videoState.reviewRange && video.currentTime >= videoState.reviewRange.end) stopVideoReview();
+  });
+  video.addEventListener('ended', () => { videoState.reviewRange = null; });
   const dropzone = $('videoDropzone');
   dropzone.tabIndex = 0; dropzone.setAttribute('role', 'button'); dropzone.setAttribute('aria-label', '수어 영상 파일 선택');
   dropzone.addEventListener('keydown', event => { if (['Enter',' '].includes(event.key)) { event.preventDefault(); $('videoFile').click(); } });
@@ -843,7 +870,7 @@ function bindVideoEvents() {
   $('videoCancelBtn').addEventListener('click', () => run(() => cancelVideoAnalysis()));
   $('videoClearBtn').addEventListener('click', () => run(clearVideo));
   $('videoCopyBtn').addEventListener('click', () => run(copyVideoResult));
-  $('videoDownloadBtn').addEventListener('click', () => { if (videoState.text) download(videoState.text, `손끝-영상${videoState.mode === 'ai' ? '-AI초안' : '-인식'}-${dayFormat.format(new Date())}.txt`, 'text/plain;charset=utf-8'); });
+  $('videoDownloadBtn').addEventListener('click', () => { if (videoState.text) download(videoState.text, `수어스튜디오-영상${videoState.mode === 'ai' ? '-AI초안' : '-인식'}-${dayFormat.format(new Date())}.txt`, 'text/plain;charset=utf-8'); });
   resetVideoResult(); renderVideoControls();
 }
 
