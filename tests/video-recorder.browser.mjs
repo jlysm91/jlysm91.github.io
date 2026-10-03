@@ -80,7 +80,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   let acceptDialog = true;
   page.on('dialog', dialog => acceptDialog ? dialog.accept() : dialog.dismiss());
-  await page.goto(origin + '/');
+  await page.goto(origin + '/#video');
   await page.waitForFunction(() => globalThis.testUI);
   const phase = async value => {
     await page.waitForFunction(value => [value, 'error'].includes(testUI.recorderUI.state.phase), value);
@@ -90,6 +90,10 @@ try {
     await page.waitForFunction(() => syntheticCamera.streams.every(stream => stream.getTracks().every(track => track.readyState === 'ended')));
   };
   const open = async () => { await page.locator('#materialRecordBtn').click(); await phase('preview'); };
+  const cameraOptions = async open => {
+    const panel = page.locator('.recorder-options');
+    if (await panel.evaluate(node => node.open) !== open) await panel.locator('summary').click();
+  };
   const close = async () => {
     await page.locator('#materialRecordClose').click();
     await page.locator('#materialRecorderDialog').waitFor({ state: 'hidden' }); await noLiveTracks();
@@ -161,14 +165,18 @@ try {
   await open();
   assert.equal(await page.locator('#materialRecordStart').isVisible(), true);
   assert.equal(await page.evaluate(() => syntheticCamera.streams.at(-1).getAudioTracks().length), 0);
+  await cameraOptions(true);
   await page.locator('#materialMirror').check();
   assert.equal(await page.locator('#materialRecorderVideo').evaluate(video => video.classList.contains('mirror')), true);
+  await cameraOptions(false);
   await capture('camera');
   const countBeforeSwitch = await page.evaluate(() => syntheticCamera.calls.length);
+  await cameraOptions(true);
   await page.locator('#materialCameraSelect').selectOption('synthetic-rear'); await phase('preview');
   await page.waitForFunction(count => syntheticCamera.calls.length === count + 1, countBeforeSwitch);
   assert.equal(await page.evaluate(() => syntheticCamera.calls.at(-1).video.deviceId.exact), 'synthetic-rear');
   assert.equal(await page.evaluate(() => syntheticCamera.streams.slice(0, -1).every(stream => stream.getTracks().every(track => track.readyState === 'ended'))), true);
+  await cameraOptions(false);
   await page.evaluate(() => { const button = document.getElementById('materialRecordStart'); button.click(); button.click(); });
   await phase('recording');
   assert.equal(await page.locator('#materialCameraSelect').isDisabled(), true);
@@ -281,7 +289,7 @@ try {
   const webm = await webmContext.newPage();
   webm.on('pageerror', error => errors.push(error.message));
   webm.on('dialog', dialog => dialog.accept());
-  await webm.goto(origin + '/?webm-recorder'); await webm.waitForFunction(() => globalThis.testUI);
+  await webm.goto(origin + '/?webm-recorder#video'); await webm.waitForFunction(() => globalThis.testUI);
   await webm.locator('#materialRecordBtn').click();
   await webm.waitForFunction(() => testUI.recorderUI.state.phase === 'preview');
   await webm.locator('#materialRecordStart').click();
@@ -315,7 +323,7 @@ try {
 
   const unsupported = await context.newPage();
   unsupported.on('pageerror', error => errors.push(error.message));
-  await unsupported.goto(origin + '/?unsupported-recorder');
+  await unsupported.goto(origin + '/?unsupported-recorder#video');
   await unsupported.waitForFunction(() => globalThis.testUI);
   await unsupported.locator('#materialRecordBtn').click();
   await unsupported.waitForFunction(() => testUI.recorderUI.state.phase === 'error');

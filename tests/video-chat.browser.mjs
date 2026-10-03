@@ -111,7 +111,7 @@ try {
     }
     await page.setViewportSize({ width: 1440, height: 1000 });
   };
-  await page.goto(origin + '/');
+  await page.goto(origin + '/#video');
   await page.waitForFunction(() => globalThis.testUI?.chatUI);
   await page.evaluate(() => testUI.personalLibrary.init());
   await loadVideo(0); await policy();

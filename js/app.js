@@ -11,7 +11,8 @@ import { createVideoDocument, validateVideoDocument, videoDocumentText } from '.
 const $ = id => document.getElementById(id);
 const SETTINGS_KEY = 'signflow.settings.v1';
 const HISTORY_KEY = 'signflow.history.v1';
-const VIEW_NAMES = { library: '내 영상 자료', studio: '보조 · 동작 예시 관리', video: '영상에서 글로', dictionary: '나의 수어 사전', history: '보조 · 동작 비교 기록', settings: '설정' };
+const VIEW_NAMES = { live: 'Live', library: '내 자료', studio: '보조 · 동작 예시 관리', video: '영상 등록', dictionary: '나의 수어 사전', history: '보조 · 동작 비교 기록', settings: '설정' };
+let currentView = null, liveOpened = false, liveReady = false;
 const DEMO_WORDS = ['안녕하세요', '감사합니다', '반갑습니다'];
 const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
 const dateFormat = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric' });
@@ -80,6 +81,22 @@ const hybridUI = createHybridAI(personalLibrary, {
 const recorderUI = createRecorderUI({
   state: () => videoState, libraryBusy: () => libraryUI.busy(), controls: renderVideoControls,
   confirmReplace: confirmVideoReplace,
+  present: dialog => {
+    const inline = currentView === 'live';
+    dialog.classList.toggle('is-inline', inline);
+    if (inline) {
+      liveOpened = true;
+      $('liveRecorderSlot').append(dialog);
+      // Reveal the parent before show() so the first keyboard focus is visible.
+      renderWorkspace(); $('liveCaptureLayout').hidden = false;
+      dialog.show(); renderWorkspace();
+    } else { document.body.append(dialog); dialog.showModal(); }
+  },
+  closed: () => {
+    if (!liveReady) liveOpened = false;
+    renderWorkspace();
+    if (currentView === 'live') $(liveOpened && liveReady ? 'liveRecordAgain' : 'liveStartBtn').focus({ preventScroll: true });
+  },
   notice: message => { videoState.notice = message; renderVideoControls(); },
   beforeOpen: async () => {
     if (state.recordPhase || state.saving) throw new Error('진행 중인 사전 동작 촬영을 마친 뒤 영상 자료를 녹화해 주세요.');
@@ -98,7 +115,8 @@ const recorderUI = createRecorderUI({
     const now = new Date(), localDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     $('personalCaptureDay').value = localDay;
     $('personalTitle').value = `녹화 영상 ${localDay} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    videoState.notice = '녹화한 영상을 확인하고 직역·한국어 글·문맥을 작성하세요. 확인한 글로 대화를 이어가거나 영상 포함 로컬 저장을 누를 수 있습니다. 아직 저장·외부 전송하지 않았습니다.';
+    videoState.notice = '녹화한 내용을 확인해 글을 작성하세요. 아직 저장하거나 외부에 전송하지 않았습니다.';
+    if (currentView === 'live') liveReady = true;
     renderVideoEditor(); syncVideoDocument(); return true;
   },
   focusEditor: () => $('videoSegments').querySelector('textarea')?.focus(),
@@ -108,6 +126,11 @@ const chatUI = createVideoChat({
   state: () => videoState, libraryBusy: () => libraryUI.busy(), controls: renderVideoControls,
   notice: message => { videoState.notice = message; renderVideoControls(); },
   record: () => recorderUI.open(),
+  settings: () => {
+    setVideoMode('ai');
+    const panel = document.querySelector('.analysis-settings');
+    panel.open = true; $('geminiKey').focus(); panel.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  },
   save: () => { $('personalTitle').focus(); $('personalSaveHeading').scrollIntoView({ block: 'center', behavior: 'smooth' }); },
   begin: controller => {
     stopVideoReview(); videoState.busy = true; videoState.controller = controller; videoState.notice = '';
@@ -311,14 +334,45 @@ function setTab(tab, focus = false) {
   if (focus) $(tab === 'training' ? 'trainingTab' : 'recognitionTab').focus();
   renderCamera();
 }
+// One editor DOM and document travel between the Live session and registration.
+// Routing never resets the document, storage link, annotations, or conversation.
+function renderWorkspace() {
+  const live = currentView === 'live' && liveOpened;
+  const capturing = live && recorderUI.active();
+  $('liveIntro').hidden = live;
+  $('liveWorkspace').hidden = !live;
+  $('liveCaptureLayout').hidden = !capturing;
+  $('liveRecordAgain').hidden = !live || !liveReady || capturing;
+  $('liveDraftLink').hidden = !videoState.file;
+  const workspace = $('videoWorkspace');
+  const host = live && liveReady ? $('liveEditSlot') : $('videoEditorHost');
+  if (workspace.parentElement !== host) host.append(workspace);
+  workspace.hidden = live && liveReady && capturing;
+  workspace.classList.toggle('has-video', Boolean(videoState.file));
+  document.querySelector('.video-output-panel').hidden = !videoState.file;
+  $('videoChatPanel').hidden = !videoState.document;
+}
+function endLive() {
+  liveOpened = false; liveReady = false;
+  recorderUI.close(); hybridUI.invalidate(); chatUI.invalidate();
+  stopVideoReview();
+  if (videoState.busy || videoState.loading) run(() => cancelVideoWork('Live를 닫아 요청을 취소했어요. 작성한 글은 유지합니다.'));
+  renderWorkspace(); $('liveStartBtn').focus({ preventScroll: true });
+}
 function showView(view, focus = false) {
   if (view === 'main') return;
-  if (!VIEW_NAMES[view]) view = 'video';
+  if (!VIEW_NAMES[view]) view = 'live';
+  const changed = currentView !== null && currentView !== view;
   libraryUI.viewChanged(view);
-  if (view !== 'video') { hybridUI.invalidate(); chatUI.invalidate(); if (recorderUI.active()) recorderUI.close('화면을 이동해 촬영을 취소하고 카메라를 껐어요.'); }
-  if (view !== 'video' && $('uploadedVideo')) {
+  currentView = view;
+  if (changed) {
+    liveOpened = false; liveReady = false;
+    hybridUI.invalidate(); chatUI.invalidate();
+    if (recorderUI.active()) recorderUI.close('화면을 이동해 카메라를 껐어요. 작성 중인 자료는 유지합니다.');
     stopVideoReview();
     if (videoState.busy || videoState.loading) run(() => cancelVideoWork('화면을 이동해 영상 분석을 취소했어요.'));
+    if (engine.cameraRunning || state.cameraBusy || state.recordPhase) run(stopCamera);
+    if (state.demo) endDemo();
   }
   document.querySelectorAll('.view').forEach(node => {
     const active = node.id === `view-${view}`; node.hidden = !active; node.classList.toggle('active', active);
@@ -329,6 +383,7 @@ function showView(view, focus = false) {
   });
   $('breadcrumbCurrent').textContent = VIEW_NAMES[view];
   document.title = `${VIEW_NAMES[view]} · 한국수어 영상 작업실`;
+  renderWorkspace();
   if (view === 'history') renderHistory();
   if (view === 'library' && !libraryUI.busy()) run(() => libraryUI.refresh());
   if (focus) $('main').focus({ preventScroll: true });
@@ -348,7 +403,7 @@ function openAdd(word = '') {
   if (state.demo) endDemo();
   cancelRecordingIntent(false);
   $('wordInput').value = word;
-  $('addTitle').textContent = word ? '같은 단어 다시 학습하기' : '새 수어 등록하기';
+  $('addTitle').textContent = word ? '같은 단어 동작 예시 추가' : '새 수어 등록하기';
   $('addError').hidden = true; $('startRecordBtn').disabled = false;
   setButtonLabel('startRecordBtn', '촬영 준비하기', 'camera');
   openDialog('addDialog'); $('wordInput').focus();
@@ -445,8 +500,8 @@ async function saveRecording({ word, sample, videoBlob }) {
   try {
     const sign = await store.saveSample(word, sample, videoBlob);
     await refreshSigns();
-    toast(`“${word}” 학습 완료 · ${sign.samples.length}개의 연습 예시${sign.hasVideo ? '' : ' · 영상 없이 동작 데이터 저장'}`);
-    setCameraStatus('학습을 마쳤어요. 실시간 인식 모드에서 등록한 동작을 다시 보여 주세요.', false, true);
+    toast(`“${word}” 동작 예시 저장 완료 · ${sign.samples.length}개의 연습 예시${sign.hasVideo ? '' : ' · 영상 없이 동작 데이터 저장'}`);
+    setCameraStatus('동작 예시를 저장했어요. 비교 모드에서 등록한 동작을 다시 보여 주세요.', false, true);
   } finally {
     state.saving = false; state.recordPhase = null; state.recording = null;
     $('recordingOverlay').hidden = true; renderCamera(); $('recognitionTab').focus({ preventScroll: true });
@@ -473,7 +528,7 @@ async function startDemo() {
   state.demo = true; state.demoIndex = 0; state.demoSentence = [DEMO_WORDS[0]];
   $('demoWord').textContent = DEMO_WORDS[0]; state.lastHandCount = -1;
   goTo('studio'); setTab('recognition'); drawFrame({ landmarks: [], handCount: 0 }); renderSentence(); renderCamera();
-  setCameraStatus('카메라를 사용하지 않는 화면 체험이에요. 예시 단어는 학습 데이터나 연습 기록에 저장되지 않아요.', false, true);
+  setCameraStatus('카메라를 사용하지 않는 화면 체험이에요. 예시 단어는 등록 동작이나 연습 기록에 저장되지 않아요.', false, true);
 }
 function endDemo() {
   state.demo = false; state.demoSentence = []; state.lastHandCount = -1;
@@ -519,7 +574,7 @@ function renderDictionary() {
   const filtered = state.signs.filter(sign => sign.word.toLocaleLowerCase('ko-KR').includes(query));
   $('dictionaryGrid').replaceChildren();
   if (!filtered.length) {
-    $('dictionaryGrid').append(emptyState(query ? '검색한 단어가 없어요' : '첫 번째 수어를 만나 볼까요?', query ? '다른 단어로 검색하거나 새 수어를 등록해 주세요.' : '단어를 입력하고, 카메라로 나의 손동작을 등록해 보세요.', query ? null : () => openAdd()));
+    $('dictionaryGrid').append(emptyState(query ? '검색한 단어가 없어요' : '등록한 단어가 없습니다', query ? '다른 단어로 검색하거나 새 수어를 등록해 주세요.' : '단어를 입력하고, 카메라로 나의 손동작을 등록해 보세요.', query ? null : () => openAdd()));
   }
   filtered.forEach(sign => {
     const card = element('article', 'sign-card');
@@ -531,7 +586,7 @@ function renderDictionary() {
     const actions = element('div', 'sign-card-actions');
     const play = button('영상 보기', 'button button-outline', () => playVideo(sign), 'play'); play.disabled = !sign.hasVideo;
     if (!sign.hasVideo) play.title = '저장된 영상이 없어요. 다시 촬영하면 영상을 보관할 수 있어요.';
-    const repeat = button('다시 학습', 'button button-quiet', () => openAdd(sign.word), 'plus');
+    const repeat = button('예시 추가', 'button button-quiet', () => openAdd(sign.word), 'plus');
     const remove = button('', 'icon-button', () => askDelete(sign), 'trash'); remove.setAttribute('aria-label', `${sign.word} 삭제`);
     actions.append(play, repeat, remove); card.append(actions); $('dictionaryGrid').append(card);
   });
@@ -540,7 +595,7 @@ function renderDictionary() {
   if (!state.signs.length) {
     const empty = element('div', 'dictionary-empty');
     const book = element('span', 'empty-book'); book.append(icon('book'), element('span', '', '+'));
-    const content = element('div'); content.append(element('h3', '', '첫 번째 수어를 만나 볼까요?'), element('p', '', '단어를 입력하고, 4초 동안 손동작을 보여 주세요.'), button('나의 첫 수어 등록하기', 'text-button purple', () => openAdd(), 'arrow'));
+    const content = element('div'); content.append(element('h3', '', '등록한 단어가 없습니다'), element('p', '', '단어를 입력하고, 4초 동안 손동작을 보여 주세요.'), button('나의 첫 수어 등록하기', 'text-button purple', () => openAdd(), 'arrow'));
     empty.append(book, content); $('dictionaryPreview').append(empty);
   } else state.signs.slice(0, 3).forEach(sign => {
     const row = element('div', 'preview-word-row preview-sign');
@@ -590,7 +645,7 @@ function readHistory() {
 function renderHistory() {
   $('historyList').replaceChildren(); $('downloadHistory').disabled = state.history.length === 0;
   if (!state.history.length) {
-    $('historyList').append(emptyState('첫 연습을 기다리고 있어요', '수어를 등록하고 실제 인식을 시작하면 이곳에 기록이 쌓여요.')); return;
+    $('historyList').append(emptyState('아직 비교 기록이 없습니다', '수어를 등록하고 실제 인식을 시작하면 이곳에 기록이 쌓여요.')); return;
   }
   state.history.forEach(entry => {
     const row = element('div', 'history-row');
@@ -614,7 +669,7 @@ async function exportData() {
     return;
   }
   cleanupBackups(); $('backupParts').replaceChildren();
-  $('backupTitle').textContent = `학습 데이터 백업 · ${parts.length}개 파일`;
+  $('backupTitle').textContent = `동작 데이터 백업 · ${parts.length}개 파일`;
   parts.forEach((part, index) => {
     const blob = new Blob([part], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob); state.backupURLs.push(url);
@@ -646,7 +701,7 @@ function renderStorage() {
   $('storageLabel').textContent = memory ? '현재 세션' : '내 브라우저';
   $('storageSidebar').textContent = memory ? '새로고침 전 백업 필요' : '이 브라우저에 저장';
   $('storageFoot').textContent = memory ? '새로고침하면 사라질 수 있어요' : fallback ? '보조 저장소 · 저장 공간 제한' : '촬영 영상도 기기에 저장돼요';
-  $('footerStorage').textContent = memory ? '브라우저 저장이 제한되어 있어요. 새로고침 전에 동작 데이터를 백업해 주세요.' : '영상과 학습 데이터는 이 브라우저에 보관돼요.';
+  $('footerStorage').textContent = memory ? '브라우저 저장이 제한되어 있어요. 새로고침 전에 동작 데이터를 백업해 주세요.' : '영상과 등록 동작은 이 브라우저에 보관합니다.';
   $('storageWarning').textContent = store.warning || (fallback ? '브라우저 보조 저장소를 사용하고 있어요. 저장 공간이 작으므로 단어와 동작 데이터를 주기적으로 백업해 주세요.' : '');
   $('storageWarning').hidden = !$('storageWarning').textContent;
 }
@@ -684,7 +739,7 @@ function renderVideoControls() {
   $('geminiKey').disabled = occupied; $('aiUploadConsent').disabled = occupied;
   $('videoAnalyzeBtn').disabled = occupied || !validFile || (!ai && !compatibleVideoSigns());
   $('videoCancelBtn').hidden = !videoState.busy;
-  setButtonLabel('videoAnalyzeBtn', videoState.busy ? '분석 중' : videoState.notice && videoState.file ? '다시 분석' : ai ? '전송 내용 확인' : '단어 후보 분석');
+  setButtonLabel('videoAnalyzeBtn', videoState.busy ? '분석 중' : ai ? '전송 내용 확인' : '단어 후보 분석');
   const step = videoState.busy ? 1 : videoState.document ? 2 : videoState.file && !videoState.loading ? 1 : 0;
   document.querySelectorAll('.video-steps li').forEach((node, index) => {
     if (index === step) node.setAttribute('aria-current', 'step'); else node.removeAttribute('aria-current');
@@ -703,10 +758,12 @@ function renderVideoControls() {
   $('videoFileMeta').textContent = videoState.loading ? '영상 길이와 재생 형식을 확인하고 있어요…' : videoState.file && videoState.duration ? `${videoState.duration.toFixed(1)}초 · ${(videoState.file.size / 1024 / 1024).toFixed(1)}MB · ${videoState.width} × ${videoState.height}` : '최대 60초 · 기기 내 분석 50MB / AI 초안 12MB';
   $('aiConnectionNote').textContent = '키는 현재 페이지에서만 사용합니다. 전송 내용 확인 → 이번 요청 승인 후에만 선택한 자료를 Google로 보냅니다. 자료 선택·저장·검색만으로 전송하지 않습니다.';
   $('videoNotice').replaceChildren();
-  const notice = videoState.notice || (!videoState.file ? '영상을 선택하세요. 선택만으로 영상을 외부에 전송하지 않습니다.' : videoState.file?.size > limit ? `AI 초안은 12MB 이하만 지원합니다. 이 영상은 직접 구간을 작성하거나 용량을 줄여 주세요.` : ai ? '아래 설정에서 키·요금제·실행 방법을 확인한 뒤 전송 내용 확인을 누르세요. 직접 구간을 작성하는 로컬 작업도 계속 이용할 수 있습니다.' : compatibleVideoSigns() ? '등록한 단어의 손동작만 비교해요. 영상은 이 브라우저에서 처리하며 서버로 업로드하지 않아요.' : '먼저 나의 수어 사전에 단어와 손동작을 등록해 주세요. 등록한 단어만 영상에서 비교할 수 있어요.');
+  const notice = videoState.notice || (!videoState.file ? '' : videoState.file?.size > limit ? `AI 초안은 12MB 이하만 지원합니다. 직접 구간을 작성하거나 용량을 줄여 주세요.` : ai ? '직접 작성하거나 초안 도구를 이용하세요. AI 초안은 KSL 성능 미검증 · 전송은 별도 승인 후.' : compatibleVideoSigns() ? '개인 사전의 단어 후보만 기기 안에서 비교합니다.' : '개인 사전에 등록한 단어가 있어야 후보를 비교할 수 있어요.');
   const noticeText = element('span', '', notice);
   $('videoNotice').append(icon('info'), noticeText);
+  $('videoNotice').hidden = !notice;
   libraryUI.update(); hybridUI.update(); recorderUI.update(); chatUI.update();
+  renderWorkspace();
   if (!ai && !videoState.notice) {
     const link = element('a', 'text-button purple', ' 나의 수어 사전 보기'); link.href = '#dictionary';
     noticeText.append(link);
@@ -1069,6 +1126,9 @@ function bindVideoEvents() {
 
 function bindEvents() {
   libraryUI.bind(); hybridUI.bind(); chatUI.bind(); recorderUI.bind();
+  $('liveStartBtn').addEventListener('click', () => run(() => recorderUI.open()));
+  $('liveRecordAgain').addEventListener('click', () => run(() => recorderUI.open()));
+  $('liveEndBtn').addEventListener('click', endLive);
   bindVideoEvents();
   $('countdownScreen').setAttribute('role', 'dialog');
   $('countdownScreen').setAttribute('aria-modal', 'true');
@@ -1125,6 +1185,9 @@ function bindEvents() {
   $('cancelCountdown').addEventListener('click', () => cancelRecordingIntent());
   $('cancelRecording').addEventListener('click', () => cancelRecordingIntent());
   document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && recorderUI.active() && $('materialRecorderDialog').classList.contains('is-inline')) {
+      event.preventDefault(); recorderUI.close(); return;
+    }
     if (event.key === 'Tab' && state.recordPhase === 'countdown') { event.preventDefault(); $('cancelCountdown').focus(); }
     if (event.key === 'Escape' && state.recordPhase && !state.saving) { event.preventDefault(); cancelRecordingIntent(); }
   });
@@ -1173,7 +1236,7 @@ async function initialize() {
   renderSentence(); renderHistory(); renderStats(); setTab('recognition'); showView(location.hash.slice(1));
   await store.init(); await refreshSigns(); renderStorage();
   run(() => libraryUI.refresh());
-  if (store.mode === 'memory') toast('브라우저 저장이 제한되어 있어요. 새로고침 전에 학습 데이터를 백업해 주세요.', true);
+  if (store.mode === 'memory') toast('브라우저 저장이 제한되어 있어요. 새로고침 전에 동작 데이터를 백업해 주세요.', true);
 }
 initialize().catch(error => {
   setCameraStatus(errorMessage(error), true, true);

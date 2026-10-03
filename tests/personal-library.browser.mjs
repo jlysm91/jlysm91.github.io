@@ -143,7 +143,7 @@ try {
     await page.setViewportSize({ width: 1440, height: 1000 });
   };
 
-  await page.goto(origin + '/'); await ready(page);
+  await page.goto(origin + '/#video'); await ready(page);
   // The auxiliary word dictionary is a separate store and must survive this workflow.
   await page.evaluate(async () => {
     await testUI.store.saveSample('보존할 단어', { id: 'personal-library-test', featureVersion: 2, duration: 2, frames: Array.from({ length: 24 }, () => Array(136).fill(.1)) });
@@ -154,7 +154,7 @@ try {
   await takeScreenshots('empty');
   await choose(); await page.locator('#videoAddSegment').click();
   await page.locator('#personalTitle').fill('약속 변경 · 합성 검증 자료');
-  await page.getByText('촬영 정보 · 나중에 예시 비교하기', { exact: true }).click();
+  await page.getByText('참고·평가 구분과 촬영 정보', { exact: true }).click();
   await page.locator('#personalSession').fill('synthetic-session-A');
   await page.locator('#personalCaptureDay').fill('2026-10-01');
   await page.locator('#personalRole').selectOption('reference');
@@ -207,8 +207,9 @@ try {
   await card(initial.id).getByRole('checkbox', { name: '약속 변경 · 합성 검증 자료 참고 예시 선택', exact: true }).focus();
   await page.keyboard.press('Space');
   await page.waitForFunction(() => !testUI.libraryUI.busy());
-  assert.match(await page.locator('#librarySelectionStatus').innerText(), /1/);
   assert.equal(await card(initial.id).getByRole('checkbox').evaluate(node => node === document.activeElement && node.checked), true);
+  await page.locator('.library-reference-panel > summary').click();
+  assert.match(await page.locator('#librarySelectionStatus').innerText(), /1/);
   await takeScreenshots('library');
 
   const downloadPromise = page.waitForEvent('download');
@@ -232,6 +233,7 @@ try {
   await waitCount(0);
   assert.equal(await page.locator('[data-library-id]').count(), 0);
   const uploadBackup = async (buffer, name = 'synthetic-reference.kslvideo') => {
+    if (!await page.locator('.library-guide').evaluate(node => node.open)) await page.locator('.library-guide > summary').click();
     await page.locator('#libraryImportFile').setInputFiles({ name, mimeType: 'application/octet-stream', buffer });
   };
   await uploadBackup(backup); await waitCount(1);

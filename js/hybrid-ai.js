@@ -12,8 +12,17 @@ export function createHybridAI(store, hooks) {
   const check = signal => { if (signal.aborted) throw new DOMException('작업을 취소했어요.', 'AbortError'); };
   const note = message => hooks.note(message);
   const annotations = record => record.document.segments.map(row => Object.fromEntries(['id', 'start', 'end', 'original', 'text', 'source', 'reviewed', 'literal', 'context', 'referents', 'intent', 'uncertainty'].map(key => [key, row[key] ?? (['literal', 'context', 'referents', 'intent', 'uncertainty'].includes(key) ? '' : row[key])])));
+  function reviewedAnnotations(document) {
+    return Array.isArray(document?.segments) && document.segments.length > 0 && document.segments.every(row =>
+      row?.reviewed === true && typeof row.text === 'string' && row.text.trim()
+      && typeof row.literal === 'string' && row.literal.trim()
+      && (row.uncertainty === undefined || typeof row.uncertainty === 'string' && !row.uncertainty.trim()));
+  }
+  function requireComparisonReview(document) {
+    if (!reviewedAnnotations(document)) throw new Error('비교 대상의 모든 구간에 직역·한국어 글을 작성하고 원본과 대조해 검토해 주세요. 불확실한 부분을 확인한 뒤 불확실성 메모를 정리하고 다시 저장해 주세요.');
+  }
   function eligible(record) {
-    return record && !record.broken && record.role === 'reference' && record.video instanceof Blob && record.document.segments.length > 0 && record.document.segments.every(row => row.reviewed && row.text.trim() && row.literal?.trim() && !row.uncertainty?.trim());
+    return record && !record.broken && record.role === 'reference' && record.video instanceof Blob && reviewedAnnotations(record.document);
   }
   function snapshot() {
     const state = hooks.state();
@@ -142,6 +151,7 @@ export function createHybridAI(store, hooks) {
         if (!['baseline', 'assisted', 'comparison'].includes(mode)) throw new Error('실행 방법을 다시 선택해 주세요.');
         if (mode !== 'baseline' && !chosen.size) throw new Error('검토한 참고 예시를 먼저 선택해 주세요.');
         if (mode === 'comparison' && (!current.id || current.role !== 'test' || state.dirty || !current.session || !current.captureDay)) throw new Error('비교할 대상은 촬영 날짜·묶음을 입력해 별도 평가용으로 로컬 저장한 뒤 열어 주세요. 수정 내용도 먼저 저장해 주세요.');
+        if (mode === 'comparison') requireComparisonReview(state.document);
         const stamp = snapshot(), sha256 = await hash(file, signal), references = [];
         if (mode !== 'baseline') for (const selected of chosen.values()) references.push(await checkedReference(selected, signal));
         if (references.length > 2 || file.size + references.reduce((sum, row) => sum + row.video.size, 0) > MAX_VIDEO_BYTES) throw new Error('대상과 참고 영상의 합계가 12MB를 넘어요. 예시 수나 영상 크기를 줄여 주세요.');
@@ -192,6 +202,7 @@ export function createHybridAI(store, hooks) {
   async function verify(plan, signal) {
     check(signal);
     if (hooks.state().file !== plan.file || snapshot() !== plan.stamp) throw new Error('승인할 대상·설정·주석이 변경됐어요. 전송 내용을 다시 확인해 주세요.');
+    if (plan.mode === 'comparison') requireComparisonReview(hooks.state().document);
     for (const reference of plan.references) await checkedReference(reference, signal);
     if (plan.mode === 'comparison') {
       const target = await store.get(plan.current.id); check(signal);

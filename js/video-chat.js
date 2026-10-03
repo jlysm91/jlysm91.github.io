@@ -172,7 +172,7 @@ export function createVideoChat(hooks) {
     if (!turns.length && !lastAttempt) list.append(node('p', '아직 대화가 없습니다. 검토한 글로 첫 질문을 보낼 수 있어요.', 'field-help'));
     for (const [index, turn] of turns.entries()) {
       const card = node('article', '', 'ai-comparison-card');
-      card.append(node('h3', `${index + 1}번째 질문 · 사용자 확인 글`), node('p', turn.question), node('h3', 'Gemini 답변'), node('p', turn.answer));
+      card.append(node('h3', `${index + 1}번째 질문 · 사용자 확인 글`), node('p', turn.question), node('h3', 'AI 답변'), node('p', turn.answer));
       card.append(node('p', `${turn.modelVersion || turn.model} · ${turn.usageMetadata.totalTokenCount ?? '사용량 미제공'}${turn.usageMetadata.totalTokenCount === undefined ? '' : '토큰'}`, 'field-help'));
       list.append(card);
     }
@@ -193,6 +193,7 @@ export function createVideoChat(hooks) {
     $('chatCancelBtn').hidden = !busy();
     $('chatClearBtn').disabled = locked || (!turns.length && !lastAttempt);
     $('chatRecordBtn').disabled = locked;
+    $('chatSettingsBtn').disabled = locked;
     $('chatSaveBtn').disabled = locked || !hooks.state().document;
     $('chatSendBtn').disabled = phase !== 'preview' || !prepared || !$('chatSendConsent').checked;
     if (turns.length >= MAX_CHAT_TURNS && !busy()) $('chatStatus').textContent = '10턴에 도달했어요. 필요한 글을 별도로 보관한 뒤 대화를 초기화해 주세요.';
@@ -234,7 +235,7 @@ export function createVideoChat(hooks) {
       const text = question(), history = copyHistory(), chosenPolicy = policy();
       normalizeConversation(text, history); chatPolicy({ ...chosenPolicy, approved: true });
       const key = $('geminiKey')?.value.trim() || '';
-      if (key.length <= 10 || key.length > 256 || /[^\x21-\x7e]/.test(key)) throw chatError('초안 생성 설정에서 Gemini API 키와 프로젝트 조건을 확인해 주세요.', 'MISSING_API_KEY');
+      if (key.length <= 10 || key.length > 256 || /[^\x21-\x7e]/.test(key)) throw chatError('AI 설정에서 API 키와 프로젝트 조건을 확인해 주세요.', 'MISSING_API_KEY');
       if (JSON.stringify({ question: text, history }).includes(key)) throw chatError('보낼 글에 API 키가 들어 있어요. 비밀 정보를 지우고 다시 확인해 주세요.', 'PRIVATE_VALUE_IN_TEXT');
       prepared = { question: text, history, policy: chosenPolicy, file: hooks.state().file, stamp: stamp(), key };
       renderPreview(prepared); phase = 'preview'; $('chatReviewDialog').showModal(); $('chatSendConsent').focus(); update();
@@ -284,22 +285,30 @@ export function createVideoChat(hooks) {
     panel.replaceChildren();
     panel.append(withId(node('h2', '확인한 글로 대화하기'), 'videoChatTitle'));
     panel.setAttribute('aria-labelledby', 'videoChatTitle');
-    panel.append(node('p', '원본과 대조해 확인한 한국어 글로 질문하고, 답변을 받은 뒤 다음 영상을 이어서 녹화하세요. 영상 해석과 글 답변은 각각 전송 승인이 필요합니다.', 'field-help'));
-    panel.append(node('p', '이 사이트에서는 Gemini가 답합니다. 사용 중인 ChatGPT의 대화·기억이나 보관함과 자동으로 연결되지 않습니다.', 'field-help'));
+    panel.append(node('p', '확인한 글로 질문하고, 답변을 받은 뒤 다음 영상을 이어서 녹화하세요.', 'field-help'));
     panel.append(node('h3', '이번에 사용할 확인 글'), withId(node('p', '', 'chat-question'), 'chatQuestion'));
     $('chatQuestion').style.whiteSpace = 'pre-wrap'; $('chatQuestion').style.overflowWrap = 'anywhere';
     const privacy = node('label', '보낼 글과 이전 대화의 개인정보', 'field-label');
     const select = withId(node('select', '', 'text-input'), 'chatPrivacyType');
     for (const [value, label] of [['personal', '개인정보 있음·확실하지 않음'], ['nonpersonal', '개인·민감·기밀 정보 없음']]) { const option = node('option', label); option.value = value; select.append(option); }
     select.style.width = '100%'; privacy.append(select); panel.append(privacy);
-    panel.append(node('p', '이 선택은 글 답변 전송에만 적용합니다. 영상·참고 주석의 개인정보 설정은 바뀌지 않습니다. 프로젝트 요금제와 약관 확인은 초안 생성 설정에서 지정합니다.', 'field-help'));
+    panel.append(node('p', '글 답변 전송에만 적용합니다. 전송 전 내용·제공자·비용을 다시 확인합니다.', 'field-help'));
     const controls = node('div', '', 'personal-actions');
-    controls.append(action('확인한 글로 답변 받기', 'chatPrepareBtn', prepare, true), action('답변 요청 취소', 'chatCancelBtn', cancel), action('다음 영상 녹화', 'chatRecordBtn', () => { if (!busy() && !blocked()) hooks.record(); }), action('현재 영상 자료에 보관', 'chatSaveBtn', () => { if (!busy() && !blocked()) hooks.save(); }));
+    const settings = action('AI 설정', 'chatSettingsBtn', () => { if (!busy() && !blocked()) hooks.settings?.(); });
+    settings.hidden = typeof hooks.settings !== 'function';
+    controls.append(action('확인한 글로 답변 받기', 'chatPrepareBtn', prepare, true), action('답변 요청 취소', 'chatCancelBtn', cancel), action('다음 영상 녹화', 'chatRecordBtn', () => { if (!busy() && !blocked()) hooks.record(); }), action('현재 영상 자료에 보관', 'chatSaveBtn', () => { if (!busy() && !blocked()) hooks.save(); }), settings);
     panel.append(controls);
-    panel.append(node('p', '영상 자료 보관 버튼은 현재 영상·검토 글의 저장 영역으로 이동합니다. 아래 대화는 영상 자료에 포함되지 않으며 자동으로 저장하지 않습니다.', 'field-help'));
+    panel.append(node('p', '영상 자료 보관에는 아래 대화가 포함되지 않습니다.', 'field-help'));
     const status = withId(node('p', '', 'field-help'), 'chatStatus'); status.setAttribute('role', 'status'); panel.append(status);
     panel.append(withId(node('p', '', 'field-help'), 'chatTurnCount'), withId(node('div', '', 'chat-turns'), 'chatTurns'), action('대화 초기화', 'chatClearBtn', clear));
-    panel.append(node('p', '질문과 답변은 현재 탭에만 남습니다. 새로고침·탭 종료 시 사라집니다. 이전 대화는 다음 요청의 확인 화면에 전부 표시되며, 최대 10턴 뒤에는 초기화해야 합니다.', 'field-help'));
+    const guidance = node('details', '', 'chat-guidance');
+    guidance.append(node('summary', '전송·보관 안내'));
+    guidance.append(node('p', '영상 해석과 글 답변은 각각 전송 승인이 필요합니다. 실제로 연결된 제공자와 모델은 전송 확인창과 답변의 출처에 표시합니다.', 'field-help'));
+    guidance.append(node('p', '이 사이트에 연결된 AI가 답합니다. 사용 중인 ChatGPT의 대화·기억이나 보관함과 자동으로 연결되지 않습니다.', 'field-help'));
+    guidance.append(node('p', '글 답변의 개인정보 선택은 영상·참고 주석의 설정을 바꾸지 않습니다. 프로젝트 요금제와 약관 확인은 AI 설정에서 지정합니다.', 'field-help'));
+    guidance.append(node('p', '영상 자료 보관 버튼은 현재 영상·검토 글의 저장 영역으로 이동합니다. 질문과 답변은 현재 탭에만 남으며 자동으로 저장하지 않습니다. 새로고침·탭 종료 시 사라집니다.', 'field-help'));
+    guidance.append(node('p', '이전 대화는 다음 요청의 확인 화면에 전부 표시됩니다. 최대 10턴 뒤에는 필요한 글을 별도로 보관하고 대화를 초기화해 주세요.', 'field-help'));
+    panel.append(guidance);
     const dialog = withId(node('dialog', '', 'ai-review-dialog'), 'chatReviewDialog'); dialog.setAttribute('aria-labelledby', 'chatReviewTitle');
     dialog.append(withId(node('h2', 'Gemini로 보낼 글과 대화 확인'), 'chatReviewTitle'), withId(node('div'), 'chatReviewManifest'));
     const label = node('label', '', 'consent-label'), consent = withId(document.createElement('input'), 'chatSendConsent'); consent.type = 'checkbox';

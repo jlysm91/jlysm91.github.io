@@ -110,7 +110,7 @@ try {
     }
     await page.setViewportSize({ width: 1440, height: 1000 });
   };
-  await page.goto(origin + '/'); await ready();
+  await page.goto(origin + '/#video'); await ready();
   const ids = await page.evaluate(async clips => {
     const make = (index, role, title, day, session) => ({
       title, role, captureDay: day, session, fileName: `synthetic-${index}.webm`, video: new Blob([new Uint8Array(clips[index])], { type: 'video/webm' }),
@@ -176,6 +176,35 @@ try {
   const thirdReference = page.getByRole('checkbox', { name: '참고 합성 영상 셋 Gemini 참고 예시', exact: true });
   await thirdReference.click();
   assert.equal(await thirdReference.isChecked(), false, 'a third reference must not be selected');
+  // Unfinished annotations remain saveable, but cannot serve as comparison ground truth.
+  await page.evaluate(async id => { globalThis.originalHybridTarget = await testUI.personalLibrary.get(id); }, ids[0]);
+  for (const kind of ['review', 'text', 'literal', 'uncertainty', 'empty']) {
+    await page.evaluate(async ({ id, kind }) => {
+      const record = await testUI.personalLibrary.get(id);
+      const document = structuredClone(globalThis.originalHybridTarget.document);
+      if (kind === 'review') document.segments[0].reviewed = false;
+      if (kind === 'text') document.segments[0].text = '   ';
+      if (kind === 'literal') document.segments[0].literal = '   ';
+      if (kind === 'uncertainty') document.segments[0].uncertainty = '아직 확인하지 못한 대상 의미';
+      if (kind === 'empty') document.segments = [];
+      const saved = await testUI.personalLibrary.save({ ...record, expectedRevision: record.revision, document });
+      if (JSON.stringify(saved.document) !== JSON.stringify(document)) throw new Error('Unfinished target annotations must stay saveable without alteration');
+    }, { id: ids[0], kind });
+    await openRecord(ids[0]); await rejectPreparation('comparison');
+    assert.match(await page.locator('#videoNotice').innerText(), /비교 대상의 모든 구간/);
+    assert.equal(requests.length, 0, `${kind} target must not send any request`);
+  }
+  await page.evaluate(async id => {
+    const record = await testUI.personalLibrary.get(id);
+    await testUI.personalLibrary.save({ ...record, expectedRevision: record.revision, document: globalThis.originalHybridTarget.document });
+  }, ids[0]);
+  await openRecord(ids[0]); await preview('comparison');
+  // A review changed after preview also invalidates the approval before sending.
+  await page.evaluate(() => { testUI.videoState.document.segments[0].reviewed = false; });
+  await confirm(); await idle();
+  assert.equal(requests.length, 0, 'a changed target review must invalidate approval');
+  assert.match(await page.locator('#videoNotice').innerText(), /변경/);
+  await openRecord(ids[0]);
   // Changing a stored reference after preview invalidates that approval before any network call.
   await preview('comparison');
   await page.evaluate(async id => {
@@ -359,7 +388,7 @@ try {
   assert.equal(await page.evaluate(() => testUI.videoState.document.segments[0].text), 'TARGET_NATURAL_NEVER_SEND');
 
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
-  console.log('PASS: explicit per-request preview approval, unpaid personal-data/paid billing guards, reviewed-only opt-in annotation search, baseline/assisted/comparison request counts, sequential identical-target comparison, target annotation exclusion, full reference video+annotations, fixed model/fps, max-two and aggregate-12MB limits, stale/deleted reference and changed target approval rejection, date/session/hash separation, audit save/reload/backup, single-mode adoption, 429 stop/no fallback, invalid response retention, cancel/retry/repeated click, preview cancellation/history back, mid-comparison revision stop and partial audit, PC/390px/320px overflow and screenshots. Synthetic data only; all external traffic intercepted or blocked.');
+  console.log('PASS: explicit per-request preview approval, unpaid personal-data/paid billing guards, reviewed-only opt-in annotation search, unfinished target save preservation with unreviewed/blank-text/blank-literal/uncertain/empty comparison rejection and corrected-target retry, post-preview target review rejection, baseline/assisted/comparison request counts, sequential identical-target comparison, target annotation exclusion, full reference video+annotations, fixed model/fps, max-two and aggregate-12MB limits, stale/deleted reference and changed target approval rejection, date/session/hash separation, audit save/reload/backup, single-mode adoption, 429 stop/no fallback, invalid response retention, cancel/retry/repeated click, preview cancellation/history back, mid-comparison revision stop and partial audit, PC/390px/320px overflow and screenshots. Synthetic data only; all external traffic intercepted or blocked.');
 } finally {
   await browser?.close(); await new Promise(resolve => server.close(resolve)); await rm(tmp, { recursive: true, force: true });
 }

@@ -47,7 +47,7 @@ try {
   });
   let acceptDialog = true;
   page.on('dialog', dialog => acceptDialog ? dialog.accept() : dialog.dismiss());
-  await page.goto(origin + '/');
+  await page.goto(origin + '/#video');
   await page.waitForFunction(() => globalThis.testUI);
   assert.equal(await page.locator('#view-video').isVisible(), true);
   assert.equal(await page.locator('#view-studio').isHidden(), true);
@@ -62,8 +62,7 @@ try {
     await page.setViewportSize({width:1440,height:1000});
   };
   await capture('input');
-  await page.locator('.analysis-settings > summary').click();
-  await page.locator('#videoLocalMode').click();
+  assert.equal(await page.locator('.analysis-settings').isHidden(), true, 'draft settings stay hidden until a video is selected');
   await page.evaluate(async () => {
     const { extractHandFeatures } = await import('/js/engine.js');
     const hand = Array.from({ length: 21 }, (_, i) => ({ x: .45 + Math.sin(i * .8) * .06, y: .65 - i * .012, z: i * .001 }));
@@ -86,6 +85,8 @@ try {
     await page.waitForFunction(() => testUI.videoState.duration > 0 && !testUI.videoState.loading && !testUI.videoState.canceling);
   };
   await choose();
+  await page.locator('.analysis-settings > summary').click();
+  await page.locator('#videoLocalMode').click();
   // Delayed cleanup of the old run must not erase the newer file selection.
   assert.equal(await page.evaluate(async () => {
     const file = testUI.videoState.file;
@@ -215,7 +216,7 @@ try {
   assert.ok(await page.locator('#uploadedVideo').evaluate(node=>node.getBoundingClientRect().top < 100));
   await page.locator('#videoReturnToSegment').click();
   assert.equal(await page.getByRole('textbox',{name:'1번 구간 한국어 글',exact:true}).evaluate(node=>node===document.activeElement),true);
-  await page.locator('[data-view="settings"]').click();
+  await page.locator('a[href="#settings"]').click();
   await page.locator('#view-settings a[href="#dictionary"]').click();
   assert.equal(await page.evaluate(()=>testUI.state.signs[0].word),'테스트');
   await page.locator('[data-view="video"]').click();
@@ -230,9 +231,9 @@ try {
     for (const id of ['videoAnalyzeBtn','videoAddSegment','videoDownloadBtn']) assert.ok((await page.locator('#'+id).boundingBox()).height>=44);
   }
   await page.goto(origin + '/dist/sign-studio-preview.html#video');
-  await page.waitForFunction(() => document.title.includes('영상에서 글로'));
+  await page.waitForFunction(() => document.title.includes('영상 등록'));
   assert.deepEqual(errors, []);
-  console.log('PASS: standalone preview over HTTP; file replacement race, queued cancellation, double start, no-hands abstention, model cancel/retry/error, history back, invalid codec, partial/empty exports, keyboard segment playback, rapid segment selection, mobile overflow, neutral copy, default video home, independent original/edited text, review reset, JSON audit export, time validation, discard protection, manual authoring, mobile video/editor navigation, auxiliary data retention. External traffic blocked; Gemini mocked.');
+  console.log('PASS: standalone preview over HTTP; file replacement race, queued cancellation, double start, no-hands abstention, model cancel/retry/error, history back, invalid codec, partial/empty exports, keyboard segment playback, rapid segment selection, mobile overflow, neutral copy, explicit video registration entry, independent original/edited text, review reset, JSON audit export, time validation, discard protection, manual authoring, mobile video/editor navigation, auxiliary data retention. External traffic blocked; Gemini mocked.');
 } finally {
   await browser?.close(); await new Promise(resolve => server.close(resolve)); await rm(tmp, { recursive: true, force: true });
 }

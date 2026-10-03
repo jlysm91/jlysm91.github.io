@@ -60,13 +60,18 @@ export function createRecorderUI(hooks) {
   }
   function update() {
     const state = hooks.state();
-    $('materialRecordBtn').disabled = active() || state.busy || state.canceling || state.loading || hooks.libraryBusy();
+    const disabled = active() || state.busy || state.canceling || state.loading || hooks.libraryBusy();
+    for (const id of ['materialRecordBtn', 'liveStartBtn', 'liveRecordAgain']) {
+      if ($(id)) $(id).disabled = disabled;
+    }
   }
   async function open() {
     const state = hooks.state();
     if (active() || state.busy || state.canceling || state.loading || hooks.libraryBusy()) return;
     const token = ++intent;
-    $('materialRecorderDialog').showModal(); render();
+    const dialog = $('materialRecorderDialog');
+    if (hooks.present) hooks.present(dialog); else dialog.showModal();
+    render();
     try {
       await hooks.beforeOpen();
       if (token !== intent || !active()) return;
@@ -83,6 +88,7 @@ export function createRecorderUI(hooks) {
     if (active()) $('materialRecorderDialog').close();
     if (message) hooks.notice(message);
     update(); hooks.controls();
+    hooks.closed?.();
   }
   async function reopen(deviceId = '') {
     if (accepting || !active() || ['recording', 'stopping', 'requesting'].includes(latest.phase)) return;
