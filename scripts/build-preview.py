@@ -28,7 +28,7 @@ def module_wrapper(name):
 
 
 script = "(() => {\n'use strict';\n"
-for name in ["storage.js", "engine.js", "video-engine.js", "gemini-video.js", "ai-audit.js", "video-document.js", "personal-library.js", "library-ui.js", "hybrid-ai.js"]:
+for name in ["storage.js", "engine.js", "video-engine.js", "gemini-video.js", "ai-audit.js", "video-document.js", "personal-library.js", "library-ui.js", "hybrid-ai.js", "video-recorder.js", "recorder-ui.js", "video-chat.js"]:
     script += module_wrapper(name)
 script += module_body("app.js") + "\n})();"
 script = script.replace("</script", "<\\/script")

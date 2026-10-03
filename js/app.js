@@ -2,6 +2,8 @@ import { SignStore, normalizeWord, MAX_IMPORT_BYTES } from './storage.js';
 import { SignEngine } from './engine.js';
 import { VideoSignAnalyzer } from './video-engine.js';
 import { createHybridAI } from './hybrid-ai.js';
+import { createRecorderUI } from './recorder-ui.js';
+import { createVideoChat } from './video-chat.js';
 import { PersonalLibrary } from './personal-library.js';
 import { createLibraryUI } from './library-ui.js';
 import { createVideoDocument, validateVideoDocument, videoDocumentText } from './video-document.js';
@@ -73,6 +75,46 @@ const hybridUI = createHybridAI(personalLibrary, {
   },
   changed: () => { videoState.dirty = true; syncVideoDocument(); },
   download: audit => download(JSON.stringify({ format: 'ksl-gemini-comparison', version: 1, audit, warning: '사용자 평가 기록이며 KSL 정확도 인증이 아닙니다. 영상·키는 포함하지 않습니다.' }, null, 2), 'Gemini-실행-평가.json', 'application/json;charset=utf-8'),
+});
+
+const recorderUI = createRecorderUI({
+  state: () => videoState, libraryBusy: () => libraryUI.busy(), controls: renderVideoControls,
+  confirmReplace: confirmVideoReplace,
+  notice: message => { videoState.notice = message; renderVideoControls(); },
+  beforeOpen: async () => {
+    if (state.recordPhase || state.saving) throw new Error('진행 중인 사전 동작 촬영을 마친 뒤 영상 자료를 녹화해 주세요.');
+    hybridUI.invalidate(); chatUI.invalidate();
+    if (state.demo) endDemo();
+    await stopCamera(); stopVideoReview();
+  },
+  cancelLoad: () => { if (videoState.loading) run(() => cancelVideoWork('녹화 영상 불러오기를 취소했어요.')); },
+  accept: async result => {
+    await selectVideoFile(result.file, { confirmed: true });
+    if (videoState.file !== result.file || !videoState.duration || videoState.loading) return false;
+    videoState.document = createVideoDocument({}, 'manual', videoState.duration);
+    videoState.document.segments.push({ id: 1, start: 0, end: videoState.duration, text: '', original: '', source: 'manual', reviewed: false });
+    videoState.nextSegment = 2; videoState.dirty = true;
+    $('videoResultLabel').textContent = '녹화 영상 · 사용자 직접 작성';
+    const now = new Date(), localDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    $('personalCaptureDay').value = localDay;
+    $('personalTitle').value = `녹화 영상 ${localDay} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    videoState.notice = '녹화한 영상을 확인하고 직역·한국어 글·문맥을 작성하세요. 확인한 글로 대화를 이어가거나 영상 포함 로컬 저장을 누를 수 있습니다. 아직 저장·외부 전송하지 않았습니다.';
+    renderVideoEditor(); syncVideoDocument(); return true;
+  },
+  focusEditor: () => $('videoSegments').querySelector('textarea')?.focus(),
+});
+
+const chatUI = createVideoChat({
+  state: () => videoState, libraryBusy: () => libraryUI.busy(), controls: renderVideoControls,
+  notice: message => { videoState.notice = message; renderVideoControls(); },
+  record: () => recorderUI.open(),
+  save: () => { $('personalTitle').focus(); $('personalSaveHeading').scrollIntoView({ block: 'center', behavior: 'smooth' }); },
+  begin: controller => {
+    stopVideoReview(); videoState.busy = true; videoState.controller = controller; videoState.notice = '';
+    const token = ++videoState.runToken; updateVideoProgress({ message: '확인한 글에 대한 Gemini 한국어 답변을 기다리고 있어요…' }, token, 'ai'); return token;
+  },
+  job: job => { videoState.jobPromise = job; const cleanup = () => { if (videoState.jobPromise === job) videoState.jobPromise = null; }; job.then(cleanup, cleanup); },
+  finish: token => { if (videoState.runToken === token) { videoState.busy = false; videoState.controller = null; videoState.jobPromise = null; $('videoProgress').hidden = true; } },
 });
 
 function element(tag, className, text) {
@@ -273,7 +315,7 @@ function showView(view, focus = false) {
   if (view === 'main') return;
   if (!VIEW_NAMES[view]) view = 'video';
   libraryUI.viewChanged(view);
-  if (view !== 'video') hybridUI.invalidate();
+  if (view !== 'video') { hybridUI.invalidate(); chatUI.invalidate(); if (recorderUI.active()) recorderUI.close('화면을 이동해 촬영을 취소하고 카메라를 껐어요.'); }
   if (view !== 'video' && $('uploadedVideo')) {
     stopVideoReview();
     if (videoState.busy || videoState.loading) run(() => cancelVideoWork('화면을 이동해 영상 분석을 취소했어요.'));
@@ -631,7 +673,7 @@ function compatibleVideoSigns() {
 function renderVideoControls() {
   if (!$('videoFile')) return;
   const ai = videoState.mode === 'ai';
-  const occupied = videoState.busy || videoState.canceling || hybridUI.busy();
+  const occupied = videoState.busy || videoState.canceling || hybridUI.busy() || chatUI.busy();
   const limit = (ai ? 12 : 50) * 1024 * 1024;
   const validFile = Boolean(videoState.file && videoState.duration && !videoState.loading && videoState.file.size <= limit);
   $('videoLocalMode').classList.toggle('active', !ai); $('videoAIMode').classList.toggle('active', ai);
@@ -664,7 +706,7 @@ function renderVideoControls() {
   const notice = videoState.notice || (!videoState.file ? '영상을 선택하세요. 선택만으로 영상을 외부에 전송하지 않습니다.' : videoState.file?.size > limit ? `AI 초안은 12MB 이하만 지원합니다. 이 영상은 직접 구간을 작성하거나 용량을 줄여 주세요.` : ai ? '아래 설정에서 키·요금제·실행 방법을 확인한 뒤 전송 내용 확인을 누르세요. 직접 구간을 작성하는 로컬 작업도 계속 이용할 수 있습니다.' : compatibleVideoSigns() ? '등록한 단어의 손동작만 비교해요. 영상은 이 브라우저에서 처리하며 서버로 업로드하지 않아요.' : '먼저 나의 수어 사전에 단어와 손동작을 등록해 주세요. 등록한 단어만 영상에서 비교할 수 있어요.');
   const noticeText = element('span', '', notice);
   $('videoNotice').append(icon('info'), noticeText);
-  libraryUI.update(); hybridUI.update();
+  libraryUI.update(); hybridUI.update(); recorderUI.update(); chatUI.update();
   if (!ai && !videoState.notice) {
     const link = element('a', 'text-button purple', ' 나의 수어 사전 보기'); link.href = '#dictionary';
     noticeText.append(link);
@@ -675,7 +717,7 @@ function stopVideoReview() {
   $('uploadedVideo')?.pause();
 }
 function resetVideoResult() {
-  hybridUI.clear(); libraryUI.reset();
+  hybridUI.clear(); chatUI.invalidate(); libraryUI.reset();
   stopVideoReview();
   $('videoResultLimitations').textContent = '';
   $('videoResultLimitations').hidden = true;
@@ -710,7 +752,7 @@ function updateVideoProgress(payload, token, mode) {
   }
 }
 async function cancelVideoAnalysis(message = '영상 분석을 취소했어요.') {
-  hybridUI.cancel();
+  hybridUI.cancel(); chatUI.cancel();
   const token = ++videoState.runToken;
   const analyzer = videoState.analyzer, job = videoState.jobPromise;
   videoState.controller?.abort(); videoState.controller = null;
@@ -814,6 +856,7 @@ function syncVideoDocument() {
   const doc = videoState.document;
   if (!doc) return;
   if (hybridUI.runState().phase === 'preview') hybridUI.invalidate();
+  chatUI.invalidate();
   const error = validateVideoDocument(doc);
   $('videoEditError').textContent = error;
   videoState.text = error ? '' : videoDocumentText(doc);
@@ -1025,7 +1068,7 @@ function bindVideoEvents() {
 }
 
 function bindEvents() {
-  libraryUI.bind(); hybridUI.bind();
+  libraryUI.bind(); hybridUI.bind(); chatUI.bind(); recorderUI.bind();
   bindVideoEvents();
   $('countdownScreen').setAttribute('role', 'dialog');
   $('countdownScreen').setAttribute('aria-modal', 'true');
@@ -1122,7 +1165,7 @@ function bindEvents() {
     if ('speechSynthesis' in globalThis) speechSynthesis.cancel();
   };
   window.addEventListener('pagehide', cleanup);
-  window.addEventListener('beforeunload', event => { if (videoState.dirty || libraryUI.busy()) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', event => { if (videoState.dirty || libraryUI.busy() || recorderUI.active()) { event.preventDefault(); event.returnValue = ''; } });
 }
 
 async function initialize() {
