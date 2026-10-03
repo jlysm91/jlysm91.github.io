@@ -62,7 +62,7 @@ try {
     await page.setViewportSize({width:1440,height:1000});
   };
   await capture('input');
-  await page.locator('.analysis-settings summary').click();
+  await page.locator('.analysis-settings > summary').click();
   await page.locator('#videoLocalMode').click();
   await page.evaluate(async () => {
     const { extractHandFeatures } = await import('/js/engine.js');
@@ -138,9 +138,17 @@ try {
   await choose();
   await page.locator('#videoAIMode').click();
   await page.locator('#geminiKey').fill('test-placeholder-key-only');
-  await page.locator('#aiUploadConsent').check();
-  await page.locator('#videoAnalyzeBtn').click();
-  await page.waitForFunction(() => testUI.videoState.result?.mode === 'ai' && !testUI.videoState.busy);
+  await page.locator('#aiServiceTier').selectOption('unpaid');
+  await page.locator('#aiPrivacyType').selectOption('nonpersonal');
+  await page.locator('#aiBillingConfirmed').check();
+  const approveAI = async () => {
+    await page.locator('#videoAnalyzeBtn').click();
+    await page.locator('#aiReviewDialog').waitFor({state:'visible'});
+    await page.locator('#aiUploadConsent').check();
+    await page.locator('#aiSendBtn').click();
+  };
+  await approveAI();
+  await page.waitForFunction(() => testUI.videoState.document?.source === 'ai' && !testUI.videoState.busy);
   assert.equal(apiCalls, 1);
   assert.match(await page.locator('#videoResultLimitations').innerText(), /2초 이후/);
   const downloadPromise = page.waitForEvent('download');
@@ -183,16 +191,15 @@ try {
   await page.locator('#videoLocalMode').click();
   assert.equal(await page.getByRole('textbox', {name:'1번 구간 한국어 글',exact:true}).inputValue(), '사용자가 확인한 한국어 문장');
   await page.locator('#videoAIMode').click();
-  await page.locator('#aiUploadConsent').check();
   await page.waitForFunction(() => document.getElementById('toastRegion').children.length === 0);
-  await page.locator('.analysis-settings summary').click();
+  await page.locator('.analysis-settings > summary').click();
   await capture('result');
   await page.screenshot({path:join(root,'dist/video-desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:join(root,'dist/video-mobile.png'),fullPage:true});
   await page.setViewportSize({width:1440,height:1000});
   reply = { segments: [], summary: '', unreadableReason: '확인할 수 있는 수어 구간이 없어요.' };
-  await page.locator('#videoAnalyzeBtn').click();
+  await approveAI();
   await page.waitForFunction(() => !testUI.videoState.busy && testUI.videoState.result?.segments?.length === 0);
   assert.match(await page.evaluate(() => testUI.videoState.text), /확인할 수 있는 수어 구간이 없어요/);
   await capture('empty');

@@ -1,7 +1,7 @@
 import { SignStore, normalizeWord, MAX_IMPORT_BYTES } from './storage.js';
 import { SignEngine } from './engine.js';
 import { VideoSignAnalyzer } from './video-engine.js';
-import { analyzeKSLVideo } from './gemini-video.js';
+import { createHybridAI } from './hybrid-ai.js';
 import { PersonalLibrary } from './personal-library.js';
 import { createLibraryUI } from './library-ui.js';
 import { createVideoDocument, validateVideoDocument, videoDocumentText } from './video-document.js';
@@ -50,6 +50,29 @@ const libraryUI = createLibraryUI(personalLibrary, {
     $('videoResultLimitations').hidden = !record.document.limitation;
     renderVideoEditor(); syncVideoDocument(); return true;
   },
+});
+
+const hybridUI = createHybridAI(personalLibrary, {
+  state: () => videoState, current: () => libraryUI.current(), selected: () => libraryUI.selected(), libraryBusy: () => libraryUI.busy(),
+  controls: renderVideoControls, confirmReplace: confirmVideoReplace,
+  note: message => { videoState.notice = message; renderVideoControls(); },
+  begin: controller => { stopVideoReview(); videoState.busy = true; videoState.controller = controller; videoState.notice = ''; return ++videoState.runToken; },
+  job: job => {
+    videoState.jobPromise = job;
+    const cleanup = () => { if (videoState.jobPromise === job) videoState.jobPromise = null; };
+    job.then(cleanup, cleanup);
+  },
+  finish: token => {
+    if (videoState.runToken === token) { videoState.busy = false; videoState.controller = null; videoState.jobPromise = null; $('videoProgress').hidden = true; }
+  },
+  progress: (update, token) => updateVideoProgress(update, token, 'ai'),
+  result: result => renderVideoResult(result, 'ai'),
+  attachAudit: audit => {
+    if (!videoState.document) videoState.document = createVideoDocument({}, 'manual', videoState.duration);
+    videoState.document.audit = audit; videoState.dirty = true; syncVideoDocument();
+  },
+  changed: () => { videoState.dirty = true; syncVideoDocument(); },
+  download: audit => download(JSON.stringify({ format: 'ksl-gemini-comparison', version: 1, audit, warning: '사용자 평가 기록이며 KSL 정확도 인증이 아닙니다. 영상·키는 포함하지 않습니다.' }, null, 2), 'Gemini-실행-평가.json', 'application/json;charset=utf-8'),
 });
 
 function element(tag, className, text) {
@@ -250,6 +273,7 @@ function showView(view, focus = false) {
   if (view === 'main') return;
   if (!VIEW_NAMES[view]) view = 'video';
   libraryUI.viewChanged(view);
+  if (view !== 'video') hybridUI.invalidate();
   if (view !== 'video' && $('uploadedVideo')) {
     stopVideoReview();
     if (videoState.busy || videoState.loading) run(() => cancelVideoWork('화면을 이동해 영상 분석을 취소했어요.'));
@@ -607,7 +631,7 @@ function compatibleVideoSigns() {
 function renderVideoControls() {
   if (!$('videoFile')) return;
   const ai = videoState.mode === 'ai';
-  const occupied = videoState.busy || videoState.canceling;
+  const occupied = videoState.busy || videoState.canceling || hybridUI.busy();
   const limit = (ai ? 12 : 50) * 1024 * 1024;
   const validFile = Boolean(videoState.file && videoState.duration && !videoState.loading && videoState.file.size <= limit);
   $('videoLocalMode').classList.toggle('active', !ai); $('videoAIMode').classList.toggle('active', ai);
@@ -616,9 +640,9 @@ function renderVideoControls() {
   if ($('videoLimitLabel')) $('videoLimitLabel').textContent = '최대 50MB · 60초';
   $('aiConnection').hidden = !ai;
   $('geminiKey').disabled = occupied; $('aiUploadConsent').disabled = occupied;
-  $('videoAnalyzeBtn').disabled = occupied || !validFile || (ai ? !$('geminiKey').value.trim() || !$('aiUploadConsent').checked : !compatibleVideoSigns());
+  $('videoAnalyzeBtn').disabled = occupied || !validFile || (!ai && !compatibleVideoSigns());
   $('videoCancelBtn').hidden = !videoState.busy;
-  setButtonLabel('videoAnalyzeBtn', videoState.busy ? '분석 중' : videoState.notice && videoState.file ? '다시 분석' : ai ? '초안 생성' : '단어 후보 분석');
+  setButtonLabel('videoAnalyzeBtn', videoState.busy ? '분석 중' : videoState.notice && videoState.file ? '다시 분석' : ai ? '전송 내용 확인' : '단어 후보 분석');
   const step = videoState.busy ? 1 : videoState.document ? 2 : videoState.file && !videoState.loading ? 1 : 0;
   document.querySelectorAll('.video-steps li').forEach((node, index) => {
     if (index === step) node.setAttribute('aria-current', 'step'); else node.removeAttribute('aria-current');
@@ -635,12 +659,12 @@ function renderVideoControls() {
   $('uploadedVideo').hidden = !videoState.file;
   $('videoFileName').textContent = videoState.file?.name || '영상 선택';
   $('videoFileMeta').textContent = videoState.loading ? '영상 길이와 재생 형식을 확인하고 있어요…' : videoState.file && videoState.duration ? `${videoState.duration.toFixed(1)}초 · ${(videoState.file.size / 1024 / 1024).toFixed(1)}MB · ${videoState.width} × ${videoState.height}` : '최대 60초 · 기기 내 분석 50MB / AI 초안 12MB';
-  $('aiConnectionNote').textContent = 'API 키는 현재 페이지에서만 사용하며 저장하지 않아요. 업로드 동의 후 분석 버튼을 누르면 영상이 Google로 전송돼요.';
+  $('aiConnectionNote').textContent = '키는 현재 페이지에서만 사용합니다. 전송 내용 확인 → 이번 요청 승인 후에만 선택한 자료를 Google로 보냅니다. 자료 선택·저장·검색만으로 전송하지 않습니다.';
   $('videoNotice').replaceChildren();
-  const notice = videoState.notice || (!videoState.file ? '영상을 선택하세요. 선택만으로 영상을 외부에 전송하지 않습니다.' : videoState.file?.size > limit ? `AI 초안은 12MB 이하만 지원합니다. 이 영상은 직접 구간을 작성하거나 용량을 줄여 주세요.` : ai ? (!$('geminiKey').value.trim() || !$('aiUploadConsent').checked ? 'AI 초안 생성은 아래 설정에서 API 키와 전송 동의가 필요합니다. 또는 구간을 추가해 직접 작성할 수 있어요.' : 'AI 초안 생성 준비가 되었어요. 초안 생성 버튼을 누르면 선택한 영상이 Google로 전송됩니다.') : compatibleVideoSigns() ? '등록한 단어의 손동작만 비교해요. 영상은 이 브라우저에서 처리하며 서버로 업로드하지 않아요.' : '먼저 나의 수어 사전에 단어와 손동작을 등록해 주세요. 등록한 단어만 영상에서 비교할 수 있어요.');
+  const notice = videoState.notice || (!videoState.file ? '영상을 선택하세요. 선택만으로 영상을 외부에 전송하지 않습니다.' : videoState.file?.size > limit ? `AI 초안은 12MB 이하만 지원합니다. 이 영상은 직접 구간을 작성하거나 용량을 줄여 주세요.` : ai ? '아래 설정에서 키·요금제·실행 방법을 확인한 뒤 전송 내용 확인을 누르세요. 직접 구간을 작성하는 로컬 작업도 계속 이용할 수 있습니다.' : compatibleVideoSigns() ? '등록한 단어의 손동작만 비교해요. 영상은 이 브라우저에서 처리하며 서버로 업로드하지 않아요.' : '먼저 나의 수어 사전에 단어와 손동작을 등록해 주세요. 등록한 단어만 영상에서 비교할 수 있어요.');
   const noticeText = element('span', '', notice);
   $('videoNotice').append(icon('info'), noticeText);
-  libraryUI.update();
+  libraryUI.update(); hybridUI.update();
   if (!ai && !videoState.notice) {
     const link = element('a', 'text-button purple', ' 나의 수어 사전 보기'); link.href = '#dictionary';
     noticeText.append(link);
@@ -651,7 +675,7 @@ function stopVideoReview() {
   $('uploadedVideo')?.pause();
 }
 function resetVideoResult() {
-  libraryUI.reset();
+  hybridUI.clear(); libraryUI.reset();
   stopVideoReview();
   $('videoResultLimitations').textContent = '';
   $('videoResultLimitations').hidden = true;
@@ -686,6 +710,7 @@ function updateVideoProgress(payload, token, mode) {
   }
 }
 async function cancelVideoAnalysis(message = '영상 분석을 취소했어요.') {
+  hybridUI.cancel();
   const token = ++videoState.runToken;
   const analyzer = videoState.analyzer, job = videoState.jobPromise;
   videoState.controller?.abort(); videoState.controller = null;
@@ -779,7 +804,7 @@ async function selectVideoFile(file, options = {}) {
 }
 function setVideoMode(mode) {
   if (libraryUI.busy() || videoState.busy || videoState.canceling || !['local', 'ai'].includes(mode)) return;
-  videoState.mode = mode; videoState.notice = ''; $('aiUploadConsent').checked = false;
+  videoState.mode = mode; videoState.notice = ''; hybridUI.invalidate();
   renderVideoControls();
 }
 function confirmVideoReplace() {
@@ -788,6 +813,7 @@ function confirmVideoReplace() {
 function syncVideoDocument() {
   const doc = videoState.document;
   if (!doc) return;
+  if (hybridUI.runState().phase === 'preview') hybridUI.invalidate();
   const error = validateVideoDocument(doc);
   $('videoEditError').textContent = error;
   videoState.text = error ? '' : videoDocumentText(doc);
@@ -911,48 +937,40 @@ function saveVideoDocument(format) {
   toast('글 문서를 내려받았어요. 영상 자료의 변경은 로컬 저장으로 따로 보관해 주세요.');
 }
 async function analyzeVideo() {
-  if (libraryUI.busy()) return;
-  if (videoState.busy || videoState.canceling || videoState.loading) return;
-  const file = videoState.file, duration = videoState.duration, mode = videoState.mode;
+  if (libraryUI.busy() || hybridUI.busy() || videoState.busy || videoState.canceling || videoState.loading) return;
+  if (videoState.mode === 'ai') { await hybridUI.prepare(); return; }
+  const file = videoState.file, duration = videoState.duration;
   if (!file || !duration) throw new Error('먼저 60초 이하의 수어 영상 파일을 선택해 주세요.');
   if (state.recordPhase || state.saving) throw new Error('현재 촬영을 마치거나 취소한 뒤 영상을 분석해 주세요.');
-  const ai = mode === 'ai';
-  if (file.size > (ai ? 12 : 50) * 1024 * 1024) throw new Error(`영상은 ${ai ? 12 : 50}MB 이하여야 해요.`);
-  if (!ai && !compatibleVideoSigns()) throw new Error('먼저 수어 사전에 단어와 손동작을 등록해 주세요.');
-  const apiKey = ai ? $('geminiKey').value.trim() : '';
-  if (ai && !apiKey) throw new Error('Google Gemini API 키를 입력해 주세요. 키는 이 페이지에서만 사용해요.');
-  if (ai && !$('aiUploadConsent').checked) throw new Error('영상을 Google로 전송하는 데 동의한 뒤 분석을 시작해 주세요.');
+  if (file.size > 50 * 1024 * 1024) throw new Error('영상은 50MB 이하여야 해요.');
+  if (!compatibleVideoSigns()) throw new Error('먼저 수어 사전에 단어와 손동작을 등록해 주세요.');
   if (!confirmVideoReplace()) return;
   const intent = videoState.runToken;
   await videoState.cancelPromise;
-  if (intent !== videoState.runToken || videoState.file !== file || videoState.mode !== mode || videoState.busy || videoState.loading || videoState.canceling) return;
+  if (intent !== videoState.runToken || videoState.file !== file || videoState.mode !== 'local' || videoState.busy || videoState.loading || videoState.canceling) return;
   const token = ++videoState.runToken;
   const controller = new AbortController(); videoState.controller = controller;
   videoState.busy = true; videoState.notice = ''; stopVideoReview(); renderVideoControls();
-  $('uploadedVideo').pause();
-  updateVideoProgress({ message: '영상 분석을 준비하고 있어요…' }, token, mode);
+  updateVideoProgress({ message: '영상 분석을 준비하고 있어요…' }, token, 'local');
   try {
     if (state.demo) endDemo();
     await stopCamera();
     if (token !== videoState.runToken || controller.signal.aborted) return;
-    const onProgress = payload => updateVideoProgress(payload, token, mode);
-    if (!ai) videoState.analyzer = new VideoSignAnalyzer({ onProgress });
-    const job = ai ? analyzeKSLVideo({ file, apiKey, signal: controller.signal, onProgress, duration }) : videoState.analyzer.analyze({ file, video: $('uploadedVideo'), signs: state.signs, threshold: settings.threshold / 100, signal: controller.signal });
+    const onProgress = payload => updateVideoProgress(payload, token, 'local');
+    videoState.analyzer = new VideoSignAnalyzer({ onProgress });
+    const job = videoState.analyzer.analyze({ file, video: $('uploadedVideo'), signs: state.signs, threshold: settings.threshold / 100, signal: controller.signal });
     videoState.jobPromise = job;
     const result = await job;
     if (token !== videoState.runToken || controller.signal.aborted || videoState.file !== file) return;
-    renderVideoResult(result, mode);
+    renderVideoResult(result, 'local');
   } catch (error) {
     if (token !== videoState.runToken || controller.signal.aborted || error.name === 'AbortError') return;
-    videoState.notice = errorMessage(error); toast(errorMessage(error), true);
-    $('videoProgress').hidden = true;
+    videoState.notice = errorMessage(error); toast(errorMessage(error), true); $('videoProgress').hidden = true;
   } finally {
-    if (token === videoState.runToken) {
-      videoState.busy = false; videoState.controller = null; videoState.analyzer = null; videoState.jobPromise = null;
-      renderVideoControls();
-    }
+    if (token === videoState.runToken) { videoState.busy = false; videoState.controller = null; videoState.analyzer = null; videoState.jobPromise = null; renderVideoControls(); }
   }
 }
+
 async function clearVideo() {
   if (libraryUI.busy()) return;
   if (!confirmVideoReplace()) return;
@@ -1007,7 +1025,7 @@ function bindVideoEvents() {
 }
 
 function bindEvents() {
-  libraryUI.bind();
+  libraryUI.bind(); hybridUI.bind();
   bindVideoEvents();
   $('countdownScreen').setAttribute('role', 'dialog');
   $('countdownScreen').setAttribute('aria-modal', 'true');

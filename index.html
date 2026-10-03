@@ -93,7 +93,26 @@
               <button class="video-mode active" id="videoAIMode" aria-pressed="true"><strong>AI 초안 · 실험</strong><small>일반 Gemini 영상 이해 / 전송 동의 필요</small></button>
               <button class="video-mode" id="videoLocalMode" aria-pressed="false"><strong>보조: 개인 사전 단어 후보</strong><small>기기 내 비교 / 문장 번역 아님</small></button>
             </div>
-            <div class="ai-connection" id="aiConnection"><p id="aiConnectionNote"></p><div class="ai-fields"><label class="field-label" for="geminiKey">Google AI API 키</label><input id="geminiKey" class="text-input" type="password" placeholder="보유한 API 키" autocomplete="off" spellcheck="false" maxlength="200"><small>키는 저장하지 않습니다. Google의 이용 조건과 API 요금이 적용될 수 있습니다. AI 초안은 최대 12MB입니다.</small><label class="consent-label"><input id="aiUploadConsent" type="checkbox"><span>선택한 영상을 Google로 전송하는 데 동의합니다.</span></label></div></div>
+            <div class="ai-connection" id="aiConnection">
+              <p id="aiConnectionNote"></p>
+              <div class="ai-fields">
+                <label class="field-label" for="geminiKey">직접 입력한 Google Gemini API 키</label><input id="geminiKey" class="text-input" type="password" placeholder="보유한 프로젝트의 API 키" autocomplete="off" spellcheck="false" maxlength="200">
+                <label class="field-label">실행 방법<select id="aiRequestMode" class="text-input"><option value="baseline">예시 없이 초안 · 1회</option><option value="assisted">선택한 예시 참고 · 1회</option><option value="comparison">같은 영상 비교 · 예시 없음/있음 2회</option></select></label>
+                <p class="field-help">고정 모델 Gemini 3.8 Flash · KSL 성능 미검증. 비교는 별도 평가용 저장 영상과 다른 날·다른 촬영 묶음의 예시를 사용합니다. 평가용 직역·정답은 전송하지 않습니다.</p>
+                <details class="ai-reference-settings"><summary>참고 예시 고르기 · 주석 검색</summary>
+                  <label class="field-label">이미 알고 있는 주제나 상황<input id="aiReferenceSearch" class="text-input" type="search" maxlength="200" placeholder="예: 약속 변경 (대상 영상 정답을 넣지 마세요)"></label>
+                  <div class="personal-actions"><button type="button" class="button button-outline" id="aiFindReferences">주석으로 예시 찾기</button><button type="button" class="button button-outline" id="aiUseLibrarySelection">자료 목록의 선택 가져오기</button></div>
+                  <p class="field-help">검토한 직역·한국어 글이 있고 불확실성 메모가 없는 참고 자료만 제안합니다. 최대 2개를 직접 선택하세요. 영상 의미 검색·자동 모델 학습이 아닙니다.</p>
+                  <div id="aiReferenceCandidates"></div><p id="aiReferenceStatus" role="status">선택한 Gemini 참고 예시가 없습니다.</p>
+                </details>
+                <label class="field-label">키가 속한 프로젝트의 실제 요금제<select id="aiServiceTier" class="text-input"><option value="">확인 후 선택</option><option value="unpaid">무료 · 결제 미연결</option><option value="paid">유료 · 기존 활성 결제 프로젝트</option></select></label>
+                <label class="field-label">대상·참고 영상과 주석의 개인정보<select id="aiPrivacyType" class="text-input"><option value="personal">개인 식별 정보가 있거나 확실하지 않음</option><option value="nonpersonal">개인·민감·기밀 정보가 없는 자료</option></select></label>
+                <p class="ai-data-warning">무료 서비스: 제출 내용·응답이 제품 개선과 사람 검토에 쓰일 수 있습니다. 개인·민감·기밀 정보 제출은 제한됩니다. 얼굴 등 식별 정보가 있는 수어 영상은 무료 경로로 보내지 마세요. 개인정보 여부는 직접 확인하며 자동 비식별 처리는 하지 않습니다. 유료 서비스도 안전·보안 목적의 제한적 보관이 있을 수 있습니다.</p>
+                <label class="consent-label"><input id="aiBillingConfirmed" type="checkbox"><span>실제 프로젝트의 요금제·할당량과 자료 이용 권한을 확인했습니다. 이 기능은 Google 약관이 허용하는 성인 개발·검증 목적으로 사용합니다.</span></label>
+                <p class="field-help">앱은 키의 요금제를 조회하거나 결제를 연결하지 않습니다. 이미 유료인 키는 선택 표시와 관계없이 과금될 수 있습니다. EEA·영국·스위스 제공 조건도 약관을 확인하세요. 한도 초과 시 자동 재시도·모델 변경·유료 전환을 하지 않습니다.</p>
+                <p class="ai-official-links"><a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Google 데이터 이용 약관</a> · <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener noreferrer">요금</a> · <a href="https://ai.google.dev/gemini-api/docs/rate-limits" target="_blank" rel="noopener noreferrer">할당량 확인 방법</a></p>
+              </div>
+            </div>
           </details>
         </section>
         <section class="panel video-output-panel" aria-labelledby="videoOutputTitle">
@@ -122,12 +141,20 @@
           <p class="video-output-note">TXT·JSON은 글만 내려받습니다. JSON에는 원본 초안·직역·수정문·문맥·시간·검토 상태가 담깁니다. 영상 포함 보관은 위의 로컬 저장을 이용하세요. API 키는 어느 백업에도 포함되지 않습니다.</p>
         </section>
       </div>
+      <section id="aiComparisonPanel" class="panel ai-comparison-panel" aria-labelledby="aiComparisonTitle" hidden>
+        <div class="panel-header"><h2 id="aiComparisonTitle">Gemini 실행 기록 · 의미 비교</h2></div>
+        <p class="field-help">모두 검토가 필요한 초안입니다. 자연스러운 문장이어도 지시 대상·부정·시간·의도가 바뀌거나 내용이 추가되지 않았는지 원본과 대조하세요.</p>
+        <div id="aiComparisonResults" class="ai-comparison-results"></div>
+        <div class="ai-evaluation-fields"><label class="field-label">원본 의미와 더 맞는 결과<select id="aiEvaluationPreference" class="text-input"><option value="unrated">아직 평가하지 않음</option><option value="baseline">예시 없음</option><option value="assisted">예시 있음</option><option value="equal">차이 없음</option><option value="neither">둘 다 의미가 맞지 않음</option></select></label><label class="field-label">누락·지어냄·불확실성 기록<textarea id="aiEvaluationNote" class="text-input" rows="3" maxlength="1000" placeholder="예: 날짜가 바뀜 / 대상 인물이 다름 / 둘 다 보류가 적절함"></textarea></label></div>
+        <div class="personal-actions"><button id="aiAdoptBaseline" class="button button-outline">예시 없는 초안을 편집에 사용</button><button id="aiAdoptAssisted" class="button button-outline">예시 있는 초안을 편집에 사용</button><button id="aiComparisonExport" class="button button-outline">실행·평가 기록 내려받기</button></div>
+        <p id="aiComparisonStatus" role="status"></p><p class="field-help">확인·수정 후 영상 포함 로컬 저장을 누르세요. 다음에 용도를 참고 예시로 지정해 직접 선택할 수 있습니다. 평가용 원본은 별도로 유지하세요.</p>
+      </section>
     </section>
     <section id="view-library" class="view" aria-labelledby="libraryTitle" hidden>
       <div class="page-heading"><div><div class="eyebrow">개인 영상 · 해석 자료</div><h1 id="libraryTitle" tabindex="-1">내 영상 자료</h1><p>원본 영상과 직접 확인한 해석을 함께 보관하고 다시 열어 수정하세요.</p></div><a href="#video" class="button button-primary">영상 작성하기</a></div>
       <div class="panel library-guide"><p>제목·직역·한국어 글·문맥으로 검색합니다. 영상의 뜻을 자동으로 찾거나 모델을 학습하는 기능은 아닙니다.</p><p>이 브라우저에만 보관 · 영상당 50MB / 60초 · 최대 20개 / 총 200MB. 브라우저 여유 공간에 따라 먼저 제한될 수 있습니다.</p><div class="personal-actions"><button id="libraryImportBtn" class="button button-outline">영상 포함 백업 복원</button><input type="file" id="libraryImportFile" accept=".kslvideo" hidden><button id="libraryRefreshBtn" class="button button-outline">목록 새로고침</button><button id="libraryCancelBtn" class="button button-outline" hidden>작업 취소</button></div><p id="libraryStatus" role="status"></p></div>
       <label class="field-label library-search">주석 검색<input type="search" id="librarySearch" class="text-input" placeholder="예: 예약, 내일, 병원" maxlength="200"></label>
-      <div class="library-reference-panel"><p id="librarySelectionStatus" role="status">선택한 참고 예시가 없습니다.</p><button id="libraryClearSelection" class="button button-outline" disabled>선택 비우기</button><p class="field-help">참고 예시는 이 화면에서 비교할 자료를 골라 두는 기능입니다. 선택한 자료는 AI에 전송되지 않으며, 새로고침하면 선택만 해제됩니다.</p></div>
+      <div class="library-reference-panel"><p id="librarySelectionStatus" role="status">선택한 참고 예시가 없습니다.</p><button id="libraryClearSelection" class="button button-outline" disabled>선택 비우기</button><p class="field-help">참고 예시는 이 화면에서 비교할 자료를 골라 두는 기능입니다. 선택만으로 전송하지 않습니다. 영상 화면에서 선택을 가져온 뒤 전송 내용을 확인하고 승인해야 Gemini에 보냅니다. 새로고침하면 선택만 해제됩니다.</p></div>
       <div id="libraryList" class="library-list"></div>
     </section>
     <section id="view-history" class="view" aria-labelledby="historyTitle" hidden><div class="page-heading"><div><div class="eyebrow"><span></span>A LITTLE PROGRESS, EVERY DAY</div><h1 id="historyTitle">연습 기록<span class="title-dot">.</span></h1><p>연습 중 인식한 단어들을 다시 살펴보세요.</p></div><button class="button button-outline" id="downloadHistory"><svg class="icon"><use href="#i-download"/></svg>기록 내려받기</button></div><div class="panel history-panel"><div class="panel-header"><h2>최근 인식 기록</h2><span class="subtle">최근 200개 · 화면 체험 제외</span></div><div id="historyList"></div></div></section>
@@ -135,12 +162,21 @@
   </main>
 </div>
 <dialog id="addDialog" class="dialog" aria-labelledby="addTitle"><form id="addForm"><div class="dialog-heading"><div><span class="eyebrow">A NEW WORD, A NEW CONNECTION</span><h2 id="addTitle">새 수어 등록하기</h2></div><button type="button" class="icon-button" data-close="addDialog" aria-label="닫기"><svg class="icon"><use href="#i-x"/></svg></button></div><p class="dialog-description">단어에 이름을 붙이고, 카메라에 손동작을 보여 주세요.</p><label class="field-label" for="wordInput">어떤 단어를 등록할까요?</label><input id="wordInput" class="text-input" maxlength="40" placeholder="예: 안녕하세요, 감사합니다" required autocomplete="off"><label class="field-label" for="recordingDuration">촬영 시간</label><select id="recordingDuration" class="text-input"><option value="4">4초 · 간단한 동작</option><option value="6">6초 · 조금 긴 동작</option><option value="8">8초 · 여러 동작</option></select><div class="recording-tips"><svg class="icon"><use href="#i-hand"/></svg><div><strong>손 전체가 잘 보이도록 준비해 주세요.</strong><p>촬영 전 3초의 준비 시간을 드려요.<br>같은 단어를 다시 등록하면 연습 예시가 추가돼요.</p></div></div><div class="form-error" id="addError" role="alert" hidden></div><div class="dialog-actions"><button type="button" class="button button-outline" data-close="addDialog">취소</button><button class="button button-primary" id="startRecordBtn" type="submit"><svg class="icon"><use href="#i-camera"/></svg>촬영 준비하기</button></div></form></dialog>
-<dialog id="helpDialog" class="dialog help-dialog" aria-labelledby="helpTitle"><div class="dialog-heading"><div><span class="eyebrow">사용 가이드</span><h2 id="helpTitle">가볍게 시작해 보세요.</h2></div><button class="icon-button" data-close="helpDialog" aria-label="닫기"><svg class="icon"><use href="#i-x"/></svg></button></div><div class="help-steps"><div><span>01</span><h3>영상을 선택하세요</h3><p>한국수어 영상을 불러오면 원본을 재생할 수 있습니다. 선택만으로 외부에 전송하지 않습니다.</p></div><div><span>02</span><h3>초안 또는 구간을 준비하세요</h3><p>AI 초안은 설정에서 개인 API 키와 전송 동의가 필요합니다. 또는 현재 영상 시점에 구간을 추가해 직접 작성할 수 있습니다.</p></div><div><span>03</span><h3>검토하고 저장하세요</h3><p>각 구간을 재생하고 한국어 글을 수정하세요. 확인한 구간에 검토 표시를 하고 글 또는 JSON 기록을 저장하세요.</p></div></div><div class="help-note">자동 초안은 일반 영상 이해 모델을 사용합니다. 연속 한국수어를 안정적으로 인식하는 전용 모델은 아직 연결되지 않았습니다. 개인 사전은 보조 단어 후보만 제공합니다.</div><button class="button button-primary full-width" data-close="helpDialog">좋아요, 시작할게요 <svg class="icon"><use href="#i-arrow"/></svg></button></dialog>
+<dialog id="helpDialog" class="dialog help-dialog" aria-labelledby="helpTitle"><div class="dialog-heading"><div><span class="eyebrow">사용 가이드</span><h2 id="helpTitle">가볍게 시작해 보세요.</h2></div><button class="icon-button" data-close="helpDialog" aria-label="닫기"><svg class="icon"><use href="#i-x"/></svg></button></div><div class="help-steps"><div><span>01</span><h3>영상을 선택하세요</h3><p>한국수어 영상을 불러오면 원본을 재생할 수 있습니다. 선택만으로 외부에 전송하지 않습니다.</p></div><div><span>02</span><h3>초안 또는 구간을 준비하세요</h3><p>AI 초안은 설정에서 API 키·요금제를 확인하고 보낼 자료를 승인해야 합니다. 또는 현재 영상 시점에 구간을 추가해 직접 작성할 수 있습니다.</p></div><div><span>03</span><h3>검토하고 저장하세요</h3><p>각 구간을 재생하고 한국어 글을 수정하세요. 직역·의역을 확인한 구간에 검토 표시를 하고 영상 포함 로컬 저장을 누르세요. 내 영상 자료에서 영상 포함 백업도 내려받을 수 있습니다.</p></div></div><div class="help-note">자동 초안은 일반 영상 이해 모델을 사용합니다. 연속 한국수어를 안정적으로 인식하는 전용 모델은 아직 연결되지 않았습니다. 개인 사전은 보조 단어 후보만 제공합니다.</div><button class="button button-primary full-width" data-close="helpDialog">좋아요, 시작할게요 <svg class="icon"><use href="#i-arrow"/></svg></button></dialog>
 <dialog id="videoDialog" class="dialog video-dialog" aria-labelledby="videoTitle"><div class="dialog-heading"><h2 id="videoTitle">등록한 동작</h2><button class="icon-button" data-close="videoDialog" aria-label="닫기"><svg class="icon"><use href="#i-x"/></svg></button></div><video id="savedVideo" controls playsinline></video><p class="subtle">이 브라우저에 저장된 최근 촬영 영상이에요.</p></dialog>
 <dialog id="deleteDialog" class="dialog" aria-labelledby="deleteTitle"><div class="dialog-heading"><h2 id="deleteTitle">이 단어를 삭제할까요?</h2><button class="icon-button" data-close="deleteDialog" aria-label="닫기"><svg class="icon"><use href="#i-x"/></svg></button></div><p id="deleteMessage" class="dialog-description"></p><div class="dialog-actions"><button class="button button-outline" data-close="deleteDialog">취소</button><button class="button button-danger" id="confirmDelete">삭제하기</button></div></dialog>
 <dialog id="backupDialog" class="dialog" aria-labelledby="backupTitle"><div class="dialog-heading"><h2 id="backupTitle">학습 데이터 백업</h2><button class="icon-button" data-close="backupDialog" aria-label="닫기"><svg class="icon"><use href="#i-x"/></svg></button></div><p class="dialog-description">데이터가 많아 여러 파일로 나누었어요. 아래 파일을 모두 내려받아 주세요. 복원할 때는 각 파일을 차례로 가져오면 돼요. 영상은 포함되지 않아요.</p><div id="backupParts" class="backup-parts"></div></dialog>
 <input id="importFile" type="file" accept="application/json,.json" hidden>
 <div class="countdown-screen" id="countdownScreen" role="dialog" aria-modal="true" aria-labelledby="countdownWord" hidden><div><span>손 전체가 화면에 보이도록 준비해 주세요</span><strong id="countdownNumber">3</strong><p id="countdownWord"></p><button class="button button-light" id="cancelCountdown">취소</button></div></div>
 <div id="toastRegion" class="toast-region" role="status" aria-live="polite"></div>
+<dialog id="aiReviewDialog" class="ai-review-dialog" aria-labelledby="aiReviewTitle">
+  <h2 id="aiReviewTitle">Google Gemini로 보낼 내용 확인</h2>
+  <p>원본은 이 브라우저에 남고 아래 자료의 사본을 Google Gemini API로 전송합니다. 영상은 구간 밖 화면·음성도 포함한 파일 전체입니다.</p>
+  <div id="aiReviewManifest"></div><p id="aiCostEstimate"></p>
+  <p class="field-help">2026-10-03 공식 문서 기준의 대략적인 사용량입니다. 실제 토큰·비용·잔여 할당량은 다를 수 있습니다. 무료 무제한이 아니며, 취소해도 이미 처리된 요청은 과금될 수 있습니다. 취소는 Google에 도착한 자료를 회수하지 않습니다.</p>
+  <label class="consent-label"><input id="aiUploadConsent" type="checkbox"><span>위 대상·예시·전체 영상·주석·호출 수와 데이터 이용·비용 조건을 확인했고 이번 요청 전송에 동의합니다.</span></label>
+  <p id="aiReviewError" role="alert"></p>
+  <div class="personal-actions"><button id="aiSendBtn" class="button button-primary" disabled>승인한 내용 전송</button><button id="aiReviewCancelBtn" class="button button-outline">취소</button></div>
+</dialog>
 </body>
 </html>

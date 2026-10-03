@@ -1,8 +1,10 @@
+import { normalizeAIAudit, aiAuditText } from './ai-audit.js';
 // Review documents never equate a model suggestion with a verified translation.
 export function createVideoDocument(result = {}, mode = 'manual', duration = 0) {
   const candidates = mode === 'local' ? result.words || [] : result.segments || [];
   return {
     source: mode, duration, limitation: result.unreadableReason || '',
+    ...(result.audit !== undefined ? { audit: normalizeAIAudit(result.audit, duration) } : {}),
     segments: candidates.map((row, index) => ({
       id: index + 1, start: row.start, end: row.end,
       original: mode === 'local' ? row.word : row.text,
@@ -23,6 +25,9 @@ export function validateVideoDocument(doc) {
     }
     if (typeof row.text !== 'string' || row.text.length > 500) return `${index + 1}번 구간의 글은 500자 이하로 작성해 주세요.`;
   }
+  if (doc.audit !== undefined) {
+    try { normalizeAIAudit(doc.audit, doc.duration); } catch (error) { return error.message; }
+  }
   return '';
 }
 
@@ -36,5 +41,6 @@ export function videoDocumentText(doc) {
     ...rows.map(row => `${time(row.start)}–${time(row.end)} [${row.reviewed && row.text.trim() && !row.uncertainty?.trim() ? '사용자 검토함' : '검토 필요'}] ${row.text.trim() || '[내용 확인 필요]'}${row.source === 'local' ? `\n참고 단어 후보: ${row.original}` : ''}${[['literal','직역'],['context','상황·문맥'],['referents','지시 대상'],['intent','의도'],['uncertainty','불확실한 부분']].filter(([key]) => row[key]?.trim()).map(([key,label]) => `\n${label}: ${row[key]}`).join('')}`),
     ...(!rows.length ? ['작성된 변환문이 없습니다.'] : []),
     ...(doc.limitation ? ['', `분석 한계: ${doc.limitation}`] : []),
+    ...(doc.audit !== undefined ? ['', aiAuditText(doc.audit, doc.duration)] : []),
   ].join('\n');
 }

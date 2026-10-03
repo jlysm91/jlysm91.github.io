@@ -1,3 +1,4 @@
+import { normalizeAIAudit } from './ai-audit.js';
 /** Personal KSL examples are local video/annotation records, never model training. */
 export const PERSONAL_DB_NAME = 'ksl-personal-library';
 export const PERSONAL_STORE_NAME = 'videos';
@@ -93,6 +94,10 @@ export function normalizePersonalInput(input) {
     role, fileName,
     document: { source: raw.source, duration: raw.duration, limitation: textField(raw.limitation, '분석 한계', 2000, { optional: true }), segments },
   };
+  if (raw.audit !== undefined) {
+    normalized.document.audit = normalizeAIAudit(raw.audit, raw.duration);
+    if (input.sha256 !== undefined && normalized.document.audit.target.sha256 !== input.sha256) fail('AI 비교 기록의 대상 영상이 현재 자료와 다릅니다. 원본 영상을 확인해 주세요.');
+  }
   if (new TextEncoder().encode(JSON.stringify(normalized)).byteLength > MAX_METADATA_BYTES) fail('자료 한 건의 주석 용량은 1MiB 미만이어야 합니다. 구간이나 주석을 나누어 저장해 주세요.');
   return { ...normalized, video: input.video };
 }
@@ -218,6 +223,7 @@ export class PersonalLibrary {
     const expectedRevision = replacing ? validRevision(input.expectedRevision) : undefined;
     const sha256 = await hashVideo(record.video);
     checkSignal(input.signal);
+    if (record.document.audit && record.document.audit.target.sha256 !== sha256) fail('AI 비교 기록의 대상 영상이 현재 영상과 다릅니다. 원본 영상을 확인해 주세요.');
     if (input.sha256 !== undefined && validHash(input.sha256) !== sha256) fail('영상 확인값이 일치하지 않습니다. 원본 영상 또는 영상 포함 백업을 확인해 주세요.');
     return this._mutate((store, rows) => {
       const existing = rows.find(row => row.id === id);

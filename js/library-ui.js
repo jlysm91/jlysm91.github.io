@@ -75,7 +75,7 @@ export function createLibraryUI(store, hooks) {
             const current = await checkedRecord(record.id); check(signal);
             if (current.revision !== record.revision || current.role !== 'reference') { await refresh(); throw new Error('자료가 변경됐어요. 최신 자료를 확인하고 다시 선택해 주세요.'); }
             selected.set(current.id, { id: current.id, revision: current.revision, title: current.title, sha256: current.sha256 });
-            status('참고 예시를 선택했어요. 선택한 영상과 주석은 외부로 전송되지 않습니다.');
+            status('참고 예시를 선택했어요. 선택만으로 전송하지 않습니다. 영상 화면에서 전송 내용을 확인하고 별도로 승인해 주세요.');
           });
         });
         label.append(checkbox, document.createTextNode('참고 예시로 선택')); card.append(label);
@@ -222,5 +222,6 @@ export function createLibraryUI(store, hooks) {
     $('libraryClearSelection').addEventListener('click', () => { selected.clear(); render(); });
     render();
   }
-  return { bind, update, reset, viewChanged, refresh, save, restore, openRecord, cancel, busy: () => Boolean(active), selected: () => [...selected.values()] };
+  const current = () => ({ ...(linked || {}), title: $('personalTitle').value.trim(), captureDay: $('personalCaptureDay').value, session: $('personalSession').value.trim(), role: $('personalRole').value });
+  return { current, bind, update, reset, viewChanged, refresh, save, restore, openRecord, cancel, busy: () => Boolean(active), selected: () => [...selected.values()] };
 }
